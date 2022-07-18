@@ -1,7 +1,7 @@
 version: "3.9"
 services:
   social-graph-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: social-graph-service
     #    ports:
     #      - 10000:9090
@@ -10,10 +10,11 @@ services:
         condition: service_started
       social-graph-mongodb:
         condition: service_started
-    restart: always
-    entrypoint: SocialGraphService
+    # restart: always
+    entrypoint: /services/SocialGraphService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   social-graph-mongodb:
     image: mongo:4.4.6
@@ -37,7 +38,7 @@ services:
     restart: always
 
   compose-post-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: compose-post-service
     #    ports:
     #      - 10001:9090
@@ -45,12 +46,13 @@ services:
     depends_on:
       jaeger-agent:
         condition: service_started
-    entrypoint: ComposePostService
+    entrypoint: /services/ComposePostService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   post-storage-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: post-storage-service
     ports:
       - 10002:9090
@@ -60,9 +62,10 @@ services:
         condition: service_started
       post-storage-mongodb:
         condition: service_started
-    entrypoint: PostStorageService
+    entrypoint: /services/PostStorageService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   post-storage-memcached:
     image: memcached
@@ -79,7 +82,7 @@ services:
     restart: always
 
   user-timeline-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: user-timeline-service
     #    ports:
     #      - 10003:9090
@@ -89,9 +92,10 @@ services:
         condition: service_started
       user-timeline-mongodb:
         condition: service_started
-    entrypoint: UserTimelineService
+    entrypoint: /services/UserTimelineService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   user-timeline-redis:
     image: redis
@@ -108,19 +112,20 @@ services:
     restart: always
 
   url-shorten-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: url-shorten-service
     #    ports:
     #      - 10004:9090
     restart: always
-    entrypoint: UrlShortenService
+    entrypoint: /services/UrlShortenService
     depends_on:
       jaeger-agent:
         condition: service_started
       url-shorten-mongodb:
         condition: service_started
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   url-shorten-memcached:
     image: memcached
@@ -137,7 +142,7 @@ services:
     restart: always
 
   user-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: user-service
     #    ports:
     #      - 10005:9090
@@ -147,9 +152,10 @@ services:
         condition: service_started
       user-mongodb:
         condition: service_started
-    entrypoint: UserService
+    entrypoint: /services/UserService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   user-memcached:
     image: memcached
@@ -166,7 +172,7 @@ services:
     restart: always
 
   media-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: media-service
     #    ports:
     #      - 10006:9090
@@ -176,9 +182,10 @@ services:
       media-mongodb:
         condition: service_started
     restart: always
-    entrypoint: MediaService
+    entrypoint: /services/MediaService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   media-memcached:
     image: memcached
@@ -195,7 +202,7 @@ services:
     restart: always
 
   text-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: text-service
     #    ports:
     #      - 10007:9090
@@ -203,12 +210,13 @@ services:
     depends_on:
       jaeger-agent:
         condition: service_started
-    entrypoint: TextService
+    entrypoint: /services/TextService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   unique-id-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: unique-id-service
     #    ports:
     #      - 10008:9090
@@ -216,12 +224,13 @@ services:
     depends_on:
       jaeger-agent:
         condition: service_started
-    entrypoint: UniqueIdService
+    entrypoint: /services/UniqueIdService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   user-mention-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: user-mention-service
     #    ports:
     #      - 10009:9090
@@ -229,12 +238,13 @@ services:
       jaeger-agent:
         condition: service_started
     restart: always
-    entrypoint: UserMentionService
+    entrypoint: /services/UserMentionService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   home-timeline-service:
-    image: deathstarbench/social-network-microservices:latest
+    image: socialnet_buildbase:latest
     hostname: home-timeline-service
     #    ports:
     #      - 10010:9090
@@ -242,9 +252,10 @@ services:
       jaeger-agent:
         condition: service_started
     restart: always
-    entrypoint: HomeTimelineService
+    entrypoint: /services/HomeTimelineService
     volumes:
-      - ./config:/social-network-microservices/config
+      - ./services:/services
+      - ./config:/config
 
   nginx-thrift:
     image: yg397/openresty-thrift:xenial
