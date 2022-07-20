@@ -42,13 +42,13 @@ void TextHandler::ComposeText(
     TextServiceReturn &_return, int64_t req_id, const std::string &text,
     const std::map<std::string, std::string> &carrier) {
   // Initialize a span
-  TextMapReader reader(carrier);
+  // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
-  TextMapWriter writer(writer_text_map);
-  auto parent_span = opentracing::Tracer::Global()->Extract(reader);
-  auto span = opentracing::Tracer::Global()->StartSpan(
-      "compose_text_server", {opentracing::ChildOf(parent_span->get())});
-  opentracing::Tracer::Global()->Inject(span->context(), writer);
+  // TextMapWriter writer(writer_text_map);
+  // auto parent_span = opentracing::Tracer::Global()->Extract(reader);
+  // auto span = opentracing::Tracer::Global()->StartSpan(
+  //     "compose_text_server", {opentracing::ChildOf(parent_span->get())});
+  // opentracing::Tracer::Global()->Inject(span->context(), writer);
 
   std::vector<std::string> mention_usernames;
   std::smatch m;
@@ -71,12 +71,12 @@ void TextHandler::ComposeText(
   }
 
   auto shortened_urls_future = std::async(std::launch::async, [&]() {
-    auto url_span = opentracing::Tracer::Global()->StartSpan(
-        "compose_urls_client", {opentracing::ChildOf(&span->context())});
+    // auto url_span = opentracing::Tracer::Global()->StartSpan(
+    //     "compose_urls_client", {opentracing::ChildOf(&span->context())});
 
     std::map<std::string, std::string> url_writer_text_map;
-    TextMapWriter url_writer(url_writer_text_map);
-    opentracing::Tracer::Global()->Inject(url_span->context(), url_writer);
+    // TextMapWriter url_writer(url_writer_text_map);
+    // opentracing::Tracer::Global()->Inject(url_span->context(), url_writer);
 
     auto url_client_wrapper = _url_client_pool->Pop();
     if (!url_client_wrapper) {
@@ -99,14 +99,14 @@ void TextHandler::ComposeText(
   });
 
   auto user_mention_future = std::async(std::launch::async, [&]() {
-    auto user_mention_span = opentracing::Tracer::Global()->StartSpan(
-        "compose_user_mentions_client",
-        {opentracing::ChildOf(&span->context())});
+    // auto user_mention_span = opentracing::Tracer::Global()->StartSpan(
+    //     "compose_user_mentions_client",
+    //     {opentracing::ChildOf(&span->context())});
 
     std::map<std::string, std::string> user_mention_writer_text_map;
-    TextMapWriter user_mention_writer(user_mention_writer_text_map);
-    opentracing::Tracer::Global()->Inject(user_mention_span->context(),
-                                          user_mention_writer);
+    // TextMapWriter user_mention_writer(user_mention_writer_text_map);
+    // opentracing::Tracer::Global()->Inject(user_mention_span->context(),
+    //                                       user_mention_writer);
 
     auto user_mention_client_wrapper = _user_mention_client_pool->Pop();
     if (!user_mention_client_wrapper) {
@@ -165,7 +165,7 @@ void TextHandler::ComposeText(
   _return.user_mentions = user_mentions;
   _return.text = updated_text;
   _return.urls = target_urls;
-  span->Finish();
+  // span->Finish();
 }
 
 }  // namespace social_network

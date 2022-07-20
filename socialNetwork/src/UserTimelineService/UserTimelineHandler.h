@@ -63,14 +63,14 @@ UserTimelineHandler::UserTimelineHandler(
 void UserTimelineHandler::WriteUserTimeline(
     int64_t req_id, int64_t post_id, int64_t user_id, int64_t timestamp,
     const std::map<std::string, std::string> &carrier) {
-  // Initialize a span
-  TextMapReader reader(carrier);
-  std::map<std::string, std::string> writer_text_map;
-  TextMapWriter writer(writer_text_map);
-  auto parent_span = opentracing::Tracer::Global()->Extract(reader);
-  auto span = opentracing::Tracer::Global()->StartSpan(
-      "write_user_timeline_server", {opentracing::ChildOf(parent_span->get())});
-  opentracing::Tracer::Global()->Inject(span->context(), writer);
+  // // Initialize a span
+  // TextMapReader reader(carrier);
+  // std::map<std::string, std::string> writer_text_map;
+  // TextMapWriter writer(writer_text_map);
+  // auto parent_span = opentracing::Tracer::Global()->Extract(reader);
+  // auto span = opentracing::Tracer::Global()->StartSpan(
+  //     "write_user_timeline_server", {opentracing::ChildOf(parent_span->get())});
+  // opentracing::Tracer::Global()->Inject(span->context(), writer);
 
   mongoc_client_t *mongodb_client =
       mongoc_client_pool_pop(_mongodb_client_pool);
@@ -98,13 +98,13 @@ void UserTimelineHandler::WriteUserTimeline(
                "]", "$position", BCON_INT32(0), "}", "}");
   bson_error_t error;
   bson_t reply;
-  auto update_span = opentracing::Tracer::Global()->StartSpan(
-      "write_user_timeline_mongo_insert_client",
-      {opentracing::ChildOf(&span->context())});
+  // auto update_span = opentracing::Tracer::Global()->StartSpan(
+  //     "write_user_timeline_mongo_insert_client",
+  //     {opentracing::ChildOf(&span->context())});
   bool updated = mongoc_collection_find_and_modify(collection, query, nullptr,
                                                    update, nullptr, false, true,
                                                    true, &reply, &error);
-  update_span->Finish();
+  // update_span->Finish();
 
   if (!updated) {
     // update the newly inserted document (upsert: false)
@@ -133,9 +133,9 @@ void UserTimelineHandler::WriteUserTimeline(
   mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
   // Update user's timeline in redis
-  auto redis_span = opentracing::Tracer::Global()->StartSpan(
-      "write_user_timeline_redis_update_client",
-      {opentracing::ChildOf(&span->context())});
+  // auto redis_span = opentracing::Tracer::Global()->StartSpan(
+  //     "write_user_timeline_redis_update_client",
+  //     {opentracing::ChildOf(&span->context())});
   try {
     if (_redis_client_pool)
       _redis_client_pool->zadd(std::to_string(user_id), std::to_string(post_id),
@@ -148,8 +148,8 @@ void UserTimelineHandler::WriteUserTimeline(
     LOG(error) << err.what();
     throw err;
   }
-  redis_span->Finish();
-  span->Finish();
+  // redis_span->Finish();
+  // span->Finish();
 }
 
 void UserTimelineHandler::ReadUserTimeline(
