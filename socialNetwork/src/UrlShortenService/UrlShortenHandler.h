@@ -15,6 +15,8 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+#include "../sync_map.h"
+
 #define HOSTNAME "http://short-url/"
 
 namespace social_network {
@@ -39,6 +41,8 @@ class UrlShortenHandler : public UrlShortenServiceIf {
   std::uniform_int_distribution<int> _distribution;
   std::string _GenRandomStr(int length);
   std::mutex *_thread_lock;
+
+  sync_map<std::string, std::string> _short_extended_map;
 };
 
 std::mt19937 UrlShortenHandler::_generator = std::mt19937(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -52,6 +56,8 @@ UrlShortenHandler::UrlShortenHandler(
   _mongodb_client_pool = mongodb_client_pool;
   _thread_lock = thread_lock;
   _distribution = std::uniform_int_distribution<int>(0, 61);
+
+  _short_extended_map.init();
 }
 
 std::string UrlShortenHandler::_GenRandomStr(int length) {
@@ -83,6 +89,20 @@ void UrlShortenHandler::ComposeUrls(
 
   std::vector<Url> target_urls;
   std::future<void> mongo_future;
+
+  if (!urls.empty()) {
+    for (auto &url : urls) {
+      Url new_target_url;
+      new_target_url.expanded_url = url;
+      new_target_url.shortened_url = HOSTNAME +
+          _GenRandomStr(10);
+      target_urls.emplace_back(new_target_url);
+      _short_extended_map.emplace(new_target_url.shortened_url,
+                                  new_target_url.expanded_url);
+    }
+  }
+  _return = std::move(target_urls);
+  return;
 
   if (!urls.empty()) {
     for (auto &url : urls) {

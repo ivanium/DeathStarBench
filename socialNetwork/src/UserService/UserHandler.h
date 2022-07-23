@@ -22,6 +22,8 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+#include "../sync_map.h"
+
 // Custom Epoch (January 1, 2018 Midnight GMT = 2018-01-01T00:00:00Z)
 #define CUSTOM_EPOCH 1514764800000
 #define MONGODB_TIMEOUT_MS 100
@@ -98,6 +100,8 @@ class UserHandler : public UserServiceIf {
   memcached_pool_st *_memcached_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<SocialGraphServiceClient>> *_social_graph_client_pool;
+
+  sync_map<std::string, User> _username_profile_map;
 };
 
 UserHandler::UserHandler(std::mutex *thread_lock, const std::string &machine_id,
@@ -112,6 +116,9 @@ UserHandler::UserHandler(std::mutex *thread_lock, const std::string &machine_id,
   _mongodb_client_pool = mongodb_client_pool;
   _secret = secret;
   _social_graph_client_pool = social_graph_client_pool;
+
+  _atomic_user_id = 0;
+  _username_profile_map.init();
 }
 
 void UserHandler::RegisterUserWithId(
@@ -119,6 +126,18 @@ void UserHandler::RegisterUserWithId(
     const std::string &last_name, const std::string &username,
     const std::string &password, const int64_t user_id,
     const std::map<std::string, std::string> &carrier) {
+
+  User user_profile;
+  user_profile.first_name = std::move(first_name);
+  user_profile.last_name = std::move(last_name);
+  user_profile.user_id = user_id;
+  user_profile.salt = GenRandomString(32);
+  user_profile.password_hashed =
+      picosha2::hash256_hex_string(std::move(password) + user_profile.salt);
+  _username_profile_map.emplace(std::move(username),
+                                std::move(user_profile));
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
@@ -242,6 +261,16 @@ void UserHandler::RegisterUser(
   // auto span = opentracing::Tracer::Global()->StartSpan(
   //     "register_user_server", {opentracing::ChildOf(parent_span->get())});
   // opentracing::Tracer::Global()->Inject(span->context(), writer);
+
+  int64_t _user_id = _atomic_user_id.fetch_add(1, std::memory_order_relaxed);
+  try {
+    RegisterUserWithId(req_id, std::move(first_name), std::move(last_name),
+                       std::move(username), std::move(password), _user_id,
+                       writer_text_map);
+  } catch (...) {
+    LOG(error) << "YIFAN: user " << _user_id << " failed";
+  }
+  return;
 
   // Compose user_id
   _thread_lock->lock();
@@ -387,6 +416,15 @@ void UserHandler::ComposeCreatorWithUsername(
   // auto span = opentracing::Tracer::Global()->StartSpan(
   //     "compose_creator_server", {opentracing::ChildOf(parent_span->get())});
   // opentracing::Tracer::Global()->Inject(span->context(), writer);
+
+  try {
+    auto &user_profile = _username_profile_map.at(username);
+    int64_t user_id = user_profile.user_id;
+    ComposeCreatorWithUserId(_return, req_id, user_id, std::move(username), writer_text_map);
+  } catch (...) {
+    LOG(error) << "YIFAN: username " << username << "doesn't exist.";
+  }
+  return;
 
   size_t user_id_size;
   uint32_t memcached_flags;
@@ -560,6 +598,33 @@ void UserHandler::Login(std::string &_return, int64_t req_id,
                         const std::string &username,
                         const std::string &password,
                         const std::map<std::string, std::string> &carrier) {
+
+  try {
+    auto &user_profile = _username_profile_map.at(username);
+    bool auth = picosha2::hash256_hex_string(password + user_profile.salt) ==
+                user_profile.password_hashed;
+    if (auth) {
+      auto user_id_str = std::to_string(user_profile.user_id);
+      auto timestamp_str = std::to_string(
+          duration_cast<seconds>(system_clock::now().time_since_epoch())
+              .count());
+      jwt::jwt_object obj{algorithm("HS256"), secret(_secret),
+                          payload({{"user_id", user_id_str},
+                                    {"username", username},
+                                    {"timestamp", timestamp_str},
+                                    {"ttl", "3600"}})};
+      _return = obj.signature();
+    } else {
+      ServiceException se;
+      se.errorCode = ErrorCode::SE_UNAUTHORIZED;
+      se.message = "Incorrect username or password";
+      throw se;
+    }
+  } catch (...) {
+    LOG(error) << "YIFAN: login failed...";
+  }
+  return;
+
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
   // TextMapWriter writer(writer_text_map);
@@ -749,6 +814,16 @@ void UserHandler::Login(std::string &_return, int64_t req_id,
 int64_t UserHandler::GetUserId(
     int64_t req_id, const std::string &username,
     const std::map<std::string, std::string> &carrier) {
+
+  try {
+    auto &user_profile = _username_profile_map.at(username);
+    return user_profile.user_id;
+  } catch (...) {
+    LOG(error) << "YIFAN: GetUserId failed";
+  }
+  return -1;
+
+
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
   // TextMapWriter writer(writer_text_map);

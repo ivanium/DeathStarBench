@@ -19,6 +19,8 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+#include "../sync_map.h"
+
 using namespace sw::redis;
 
 namespace social_network {
@@ -55,6 +57,9 @@ class SocialGraphHandler : public SocialGraphServiceIf {
   Redis *_redis_client_pool;
   RedisCluster *_redis_cluster_client_pool;
   ClientPool<ThriftClient<UserServiceClient>> *_user_service_client_pool;
+
+  sync_map<int64_t, std::set<int64_t>> _user_followers_map;
+  sync_map<int64_t, std::set<int64_t>> _user_followees_map;
 };
 
 SocialGraphHandler::SocialGraphHandler(
@@ -64,6 +69,9 @@ SocialGraphHandler::SocialGraphHandler(
   _redis_client_pool = redis_client_pool;
   _redis_cluster_client_pool = nullptr;
   _user_service_client_pool = user_service_client_pool;
+
+  _user_followers_map.init();
+  _user_followees_map.init();
 }
 
 SocialGraphHandler::SocialGraphHandler(
@@ -74,11 +82,25 @@ SocialGraphHandler::SocialGraphHandler(
   _redis_client_pool = nullptr;
   _redis_cluster_client_pool = redis_cluster_client_pool;
   _user_service_client_pool = user_service_client_pool;
+
+  _user_followers_map.init();
+  _user_followees_map.init();
 }
 
 void SocialGraphHandler::Follow(
     int64_t req_id, int64_t user_id, int64_t followee_id,
     const std::map<std::string, std::string> &carrier) {
+
+  if (_user_followees_map.find(user_id))
+    _user_followees_map.at(user_id).emplace(followee_id);
+  else
+    _user_followees_map[user_id].emplace(followee_id);
+  if (_user_followers_map.find(followee_id))
+    _user_followers_map.at(followee_id).emplace(user_id);
+  else
+    _user_followers_map[followee_id].emplace(user_id);
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
@@ -264,6 +286,13 @@ void SocialGraphHandler::Follow(
 void SocialGraphHandler::Unfollow(
     int64_t req_id, int64_t user_id, int64_t followee_id,
     const std::map<std::string, std::string> &carrier) {
+
+  if (_user_followees_map.find(user_id))
+    _user_followees_map.at(user_id).erase(followee_id);
+  if (_user_followers_map.find(followee_id))
+    _user_followers_map.at(followee_id).erase(user_id);
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
@@ -430,6 +459,13 @@ void SocialGraphHandler::Unfollow(
 void SocialGraphHandler::GetFollowers(
     std::vector<int64_t> &_return, const int64_t req_id, const int64_t user_id,
     const std::map<std::string, std::string> &carrier) {
+
+  if (_user_followers_map.find(user_id)) {
+    auto &set = _user_followers_map.at(user_id);
+    _return.insert(_return.end(), set.begin(), set.end());
+  }
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
@@ -560,6 +596,13 @@ void SocialGraphHandler::GetFollowers(
 void SocialGraphHandler::GetFollowees(
     std::vector<int64_t> &_return, const int64_t req_id, const int64_t user_id,
     const std::map<std::string, std::string> &carrier) {
+
+  if (_user_followees_map.find(user_id)) {
+    auto &set = _user_followees_map.at(user_id);
+    _return.insert(_return.end(), set.begin(), set.end());
+  }
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
@@ -697,6 +740,9 @@ void SocialGraphHandler::GetFollowees(
 void SocialGraphHandler::InsertUser(
     int64_t req_id, int64_t user_id,
     const std::map<std::string, std::string> &carrier) {
+
+  return;
+
   // Initialize a span
   // TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;

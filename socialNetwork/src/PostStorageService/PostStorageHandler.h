@@ -15,6 +15,8 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+#include "../sync_map.h"
+
 namespace social_network {
 using json = nlohmann::json;
 
@@ -36,6 +38,8 @@ class PostStorageHandler : public PostStorageServiceIf {
  private:
   memcached_pool_st *_memcached_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
+
+  sync_map<int64_t, Post> _id_post_map;
 };
 
 PostStorageHandler::PostStorageHandler(
@@ -43,6 +47,8 @@ PostStorageHandler::PostStorageHandler(
     mongoc_client_pool_t *mongodb_client_pool) {
   _memcached_client_pool = memcached_client_pool;
   _mongodb_client_pool = mongodb_client_pool;
+
+  _id_post_map.init();
 }
 
 void PostStorageHandler::StorePost(
@@ -56,6 +62,9 @@ void PostStorageHandler::StorePost(
   // auto span = opentracing::Tracer::Global()->StartSpan(
   //     "store_post_server", {opentracing::ChildOf(parent_span->get())});
   // opentracing::Tracer::Global()->Inject(span->context(), writer);
+
+  _id_post_map.emplace(post.post_id, std::move(post));
+  return;
 
   mongoc_client_t *mongodb_client =
       mongoc_client_pool_pop(_mongodb_client_pool);
@@ -172,6 +181,14 @@ void PostStorageHandler::ReadPost(
   // auto span = opentracing::Tracer::Global()->StartSpan(
   //     "read_post_server", {opentracing::ChildOf(parent_span->get())});
   // opentracing::Tracer::Global()->Inject(span->context(), writer);
+
+  try {
+    auto &post = _id_post_map.at(post_id);
+    _return = std::move(post);
+  } catch (...) {
+    LOG(error) << "YIFAN: failed to get post from map";
+  }
+  return;
 
   std::string post_id_str = std::to_string(post_id);
 
@@ -368,6 +385,12 @@ void PostStorageHandler::ReadPosts(
   if (post_ids.empty()) {
     return;
   }
+
+  for (auto &post_id : post_ids) {
+    auto &post = _id_post_map.at(post_id);
+    _return.emplace_back(post);
+  }
+  return;
 
   std::set<int64_t> post_ids_not_cached(post_ids.begin(), post_ids.end());
   if (post_ids_not_cached.size() != post_ids.size()) {

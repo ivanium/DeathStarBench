@@ -13,6 +13,8 @@
 #include "../tracing.h"
 #include "../utils.h"
 
+#include "../sync_map.h"
+
 namespace social_network {
 
 class UserMentionHandler : public UserMentionServiceIf {
@@ -51,6 +53,10 @@ void UserMentionHandler::ComposeUserMentions(
   // opentracing::Tracer::Global()->Inject(span->context(), writer);
 
   std::vector<UserMention> user_mentions;
+
+  _return = user_mentions;
+  return;
+
   if (!usernames.empty()) {
     std::map<std::string, bool> usernames_not_cached;
 
