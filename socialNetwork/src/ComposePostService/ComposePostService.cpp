@@ -1,6 +1,8 @@
 #include <signal.h>
 #include <thrift/protocol/TBinaryProtocol.h>
-#include <thrift/server/TThreadedServer.h>
+// #include <thrift/server/TThreadedServer.h>
+// #include <thrift/server/TNonblockingServer.h>
+#include <thrift/server/TThreadPoolServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
 
@@ -9,7 +11,9 @@
 #include "ComposePostHandler.h"
 
 using apache::thrift::protocol::TBinaryProtocolFactory;
-using apache::thrift::server::TThreadedServer;
+// using apache::thrift::server::TThreadedServer;
+// using apache::thrift::server::TNonblockingServer;
+using apache::thrift::server::TThreadPoolServer;
 using apache::thrift::transport::TFramedTransportFactory;
 using apache::thrift::transport::TServerSocket;
 using namespace social_network;
@@ -98,7 +102,8 @@ int main(int argc, char *argv[]) {
       unique_id_conns, unique_id_timeout, unique_id_keepalive, config_json);
 
   std::shared_ptr<TServerSocket> server_socket = get_server_socket(config_json, "0.0.0.0", port);
-  TThreadedServer server(
+//   TThreadedServer server(
+  TThreadPoolServer server(
       std::make_shared<ComposePostServiceProcessor>(
           std::make_shared<ComposePostHandler>(
               &post_storage_client_pool, &user_timeline_client_pool,

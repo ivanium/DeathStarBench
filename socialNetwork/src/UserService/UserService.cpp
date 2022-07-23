@@ -1,8 +1,12 @@
 #include <signal.h>
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/server/TThreadedServer.h>
+#include <thrift/server/TThreadPoolServer.h>
+#include <thrift/server/TNonblockingServer.h>
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TServerSocket.h>
+#include <thrift/transport/TNonblockingServerSocket.h>
+#include <thrift/concurrency/ThreadManager.h>
 
 #include "../utils.h"
 #include "../utils_memcached.h"
@@ -12,8 +16,13 @@
 
 using apache::thrift::protocol::TBinaryProtocolFactory;
 using apache::thrift::server::TThreadedServer;
+using apache::thrift::server::TThreadPoolServer;
+using apache::thrift::server::TNonblockingServer;
+using apache::thrift::concurrency::ThreadManager;
+using apache::thrift::concurrency::PosixThreadFactory;
 using apache::thrift::transport::TFramedTransportFactory;
 using apache::thrift::transport::TServerSocket;
+using apache::thrift::transport::TNonblockingServerSocket;
 using namespace social_network;
 
 void sigintHandler(int sig) { exit(EXIT_SUCCESS); }
@@ -84,13 +93,31 @@ int main(int argc, char *argv[]) {
   mongoc_client_pool_push(mongodb_client_pool, mongodb_client);
   std::shared_ptr<TServerSocket> server_socket = get_server_socket(config_json, "0.0.0.0", port);
 
-  TThreadedServer server(
+  std::shared_ptr<ThreadManager> threadManager
+      = ThreadManager::newSimpleThreadManager(48);
+  threadManager->threadFactory(std::make_shared<PosixThreadFactory>(new PosixThreadFactory()));
+  threadManager->start();
+
+
+  // TThreadedServer server(
+  TThreadPoolServer server(
       std::make_shared<UserServiceProcessor>(std::make_shared<UserHandler>(
           &thread_lock, machine_id, secret, memcached_client_pool,
           mongodb_client_pool, &social_graph_client_pool)),
       server_socket,
       std::make_shared<TFramedTransportFactory>(),
-      std::make_shared<TBinaryProtocolFactory>());
+      std::make_shared<TBinaryProtocolFactory>(),
+      threadManager);
+
+  // TNonblockingServer server(
+  //     std::make_shared<UserServiceProcessor>(std::make_shared<UserHandler>(
+  //         &thread_lock, machine_id, secret, memcached_client_pool,
+  //         mongodb_client_pool, &social_graph_client_pool)),
+  //     std::make_shared<TBinaryProtocolFactory>(),
+  //     // std::make_shared<TFramedTransportFactory>(),
+  //     std::make_shared<TNonblockingServerSocket>(port),
+  //     threadManager);
+  // server.setNumIOThreads(48);
   LOG(info) << "Starting the user-service server ...";
   server.serve();
 }
