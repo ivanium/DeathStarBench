@@ -101,6 +101,7 @@ class UserHandler : public UserServiceIf {
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<SocialGraphServiceClient>> *_social_graph_client_pool;
 
+  std::atomic<int64_t> _atomic_user_id;
   sync_map<std::string, User> _username_profile_map;
 };
 
