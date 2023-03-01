@@ -5,6 +5,7 @@ import string
 import random
 import argparse
 
+import time
 
 async def upload_follow(session, addr, user_0, user_1):
   payload = {'user_name': 'username_' + user_0,
@@ -76,6 +77,8 @@ def printResults(results):
 async def register(addr, nodes, limit=200):
   tasks = []
   conn = aiohttp.TCPConnector(limit=limit)
+
+  stt = time.time()
   async with aiohttp.ClientSession(connector=conn) as session:
     print('Registering Users...')
     for i in range(nodes):
@@ -84,6 +87,9 @@ async def register(addr, nodes, limit=200):
       if i % limit == 0:
         _ = await asyncio.gather(*tasks)
         print(i)
+        end = time.time()
+        print(f"Dur: {end-stt}s")
+        stt = end
     results = await asyncio.gather(*tasks)
     printResults(results)
 
@@ -113,6 +119,8 @@ async def compose(addr, nodes, limit=200):
   idx = 0
   tasks = []
   conn = aiohttp.TCPConnector(limit=limit)
+
+  stt = time.time()
   async with aiohttp.ClientSession(connector=conn) as session:
     print('Composing posts...')
     for i in range(nodes):
@@ -123,6 +131,9 @@ async def compose(addr, nodes, limit=200):
         if idx % limit == 0:
           _ = await asyncio.gather(*tasks)
           print(idx)
+          end = time.time()
+          print(f"Dur: {end-stt}s")
+          stt = end
     results = await asyncio.gather(*tasks)
     printResults(results)
 
