@@ -1,12 +1,13 @@
 #!/bin/bash
 
-NR_THD=48
+NR_THD=24
 NR_CONN=192
-DUR=20
+DUR=30
 
 WORKLOAD=mixed-worload
 ADDR=http://localhost:8080
 API=
+RPS=100000
 
 
 # Compose posts
@@ -17,7 +18,7 @@ compose_post() {
     ./wrk -D exp -t ${NR_THD} -c ${NR_CONN} -d ${DUR} \
         -L -s ./scripts/social-network/${WORKLOAD}.lua \
         ${ADDR}${API} \
-        -R 100000000
+        -R ${RPS}
     echo Finish composing posts...
 }
 
@@ -28,7 +29,7 @@ read_home_timelines() {
     ./wrk -D exp -t ${NR_THD} -c ${NR_CONN} -d ${DUR} \
         -L -s ./scripts/social-network/${WORKLOAD}.lua \
         ${ADDR}${API} \
-        -R 100000000
+        -R ${RPS}
     echo Finish reading home timelines...
 }
 
@@ -39,10 +40,10 @@ read_user_timelines() {
     ./wrk -D exp -t ${NR_THD} -c ${NR_CONN} -d ${DUR} \
         -L -s ./scripts/social-network/${WORKLOAD}.lua \
         ${ADDR}${API} \
-        -R 100000000
+        -R ${RPS}
     echo Finish read user timelines...
 }
 
 compose_post
-
 # read_home_timelines
+# read_user_timelines
