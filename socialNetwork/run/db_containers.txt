@@ -1,0 +1,6 @@
+socialnetwork-media-mongodb-1
+socialnetwork-post-storage-mongodb-1
+socialnetwork-user-timeline-mongodb-1
+socialnetwork-url-shorten-mongodb-1
+socialnetwork-social-graph-mongodb-1
+socialnetwork-user-mongodb-1
