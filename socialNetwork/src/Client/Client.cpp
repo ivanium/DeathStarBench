@@ -277,14 +277,17 @@ int ComposePost(int64_t user_id) {
   return 0;
 }
 
-int ReadUserTimeline() {
+int ReadUserTimeline(int64_t user_id = -1) {
   std::map<std::string, std::string> carrier;
-  int64_t user_id = (*state.dist_1_numusers)(*state.gen);
+  if (user_id == -1)
+    user_id = (*state.dist_1_numusers)(*state.gen);
   int64_t req_id = random_int64();
+  int64_t start = 0;
+  int64_t stop = 20;
   // int64_t start = 0;
   // int64_t stop = (*state.dist_1_100)(*state.gen);
-  int64_t start = (*state.dist_1_100)(*state.gen) % 10;
-  int64_t stop = start + 1;
+  // int64_t start = (*state.dist_1_100)(*state.gen) % 20;
+  // int64_t stop = start + 1;
   std::vector<social_network::Post> ret;
 
   auto clientPool = state.user_timeline_client.get();
@@ -292,14 +295,14 @@ int ReadUserTimeline() {
   if (!clientWrapper) {
     ServiceException se;
     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-    se.message = "Failed to connect to home-timeline-service";
+    se.message = "Failed to connect to user-timeline-service";
     throw se;
   }
   auto client = clientWrapper->GetClient();
   try {
     client->ReadUserTimeline(ret, req_id, user_id, start, stop, carrier);
   } catch (...) {
-    std::cout << "Failed to read posts from home-timeline-service" << std::endl;
+    std::cout << "Failed to read posts from user-timeline-service" << std::endl;
     state.user_timeline_client.get()->Remove(clientWrapper);
     throw;
   }
@@ -486,6 +489,52 @@ int warmup_posts() {
   return 0;
 }
 
+int read_posts() {
+  const int BATCH_SIZE = 100;
+  auto stt = std::chrono::high_resolution_clock::now();
+  std::cout << "Start reading posts (user timeslines)..." << std::endl;
+  std::atomic<int64_t> numFinished { 0 };
+  std::vector<std::thread> thds;
+  for (int tid = 0; tid < kNumThd; tid++) {
+    thds.push_back(std::thread([&numFinished, tid=tid]() {
+      std::vector<std::future<int>> futures;
+      int64_t chunkSize = (state.getNumUsers() + kNumThd - 1) / kNumThd;
+      int64_t stt = chunkSize * tid;
+      int64_t end = std::min(stt + chunkSize, state.getNumUsers());
+      for (int64_t i = stt; i < end; i++) {
+        futures.push_back(std::async(std::launch::async, [i=i]() {
+          ReadUserTimeline(i);
+          return 0;
+        }));
+
+        if (futures.size() % BATCH_SIZE == 0) {
+          for (auto &future : futures)
+            future.get();
+          futures.clear();
+          if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
+              std::cout << "Finished users: " << numFinished.load()
+                        << std::endl;
+          }
+        }
+      }
+      for (auto &future : futures)
+        future.get();
+    }));
+  }
+
+  for (auto &thd : thds) {
+    thd.join();
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  std::cout << "Read posts (user timelines) duration: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
+                   .count()
+            << "ms" << std::endl;
+
+  return 0;
+}
+
 int do_work() {
   auto stt = std::chrono::high_resolution_clock::now();
   std::vector<std::thread> thds;
@@ -530,10 +579,24 @@ int do_work() {
 
 int main(int argc, char *argv[]) {
   state.init();
-  reg_users();
-  add_followers();
-  warmup_posts();
-  // do_work();
+
+  bool init = false;
+  if (argc > 1 && strncmp(argv[1], "init", 4) == 0)
+    init = true;
+  if (init) {
+    reg_users();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    add_followers();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    warmup_posts();
+  }
+
+  read_posts();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  do_work();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  do_work();
 
   return 0;
 }
