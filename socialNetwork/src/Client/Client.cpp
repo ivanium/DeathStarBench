@@ -41,6 +41,7 @@ constexpr static uint32_t kMaxNumMentionsPerText = 2;
 constexpr static uint32_t kMaxNumUrlsPerText = 2;
 constexpr static uint32_t kMaxNumMediasPerText = 2;
 constexpr static uint32_t kNumThd = 4;
+constexpr static uint32_t kPerThdWorkload = 100000;
 
 constexpr static char kDatasetPath[] = "/datasets/social-graph";
 constexpr static char kDatasetName[] = "soc-twitter-follows-mun";
@@ -192,7 +193,8 @@ int RegisterUser(int64_t user_id) {
     client->RegisterUserWithId(req_id, firstname, lastname, username, password,
                                user_id, carrier);
   } catch (...) {
-    std::cout << "Failed to register user " << user_id << " from user-service" << std::endl;
+    std::cout << "Failed to register user " << user_id << " from user-service"
+              << std::endl;
     state.user_service_client.get()->Remove(clientWrapper);
     throw;
   }
@@ -217,7 +219,8 @@ int Follow(int64_t src, int64_t dst) {
     client->Follow(req_id, src, dst, carrier);
     client->Follow(req_id, dst, src, carrier);
   } catch (...) {
-    std::cout << "Failed to follow in social-graph-service" << std::endl;
+    std::cout << "Failed to follow in social-graph-service:" << src << "<->"
+              << dst << std::endl;
     state.social_graph_client.get()->Remove(clientWrapper);
     throw;
   }
@@ -336,6 +339,7 @@ int ReadHomeTimeline() {
 }
 
 int reg_users() {
+  const int BATCH_SIZE = 100;
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
 
@@ -355,11 +359,11 @@ int reg_users() {
               return 0;
             },
             uid));
-        if (futures.size() >= 500) {
+        if (futures.size() >= BATCH_SIZE) {
           for (auto &future : futures)
             future.get();
           futures.clear();
-          if (numFinished.fetch_add(500) % 10000 == 0)
+          if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0)
             std::cout << "Register " << numFinished.load() << " users..."
                       << std::endl;
         }
@@ -383,6 +387,8 @@ int reg_users() {
 }
 
 int add_followers() {
+  const int BATCH_SIZE = 100;
+
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
   std::vector<std::thread> thds;
@@ -403,11 +409,11 @@ int add_followers() {
             },
             edge.first, edge.second));
 
-        if (futures.size() >= 200) {
+        if (futures.size() >= BATCH_SIZE) {
           for (auto &future : futures)
             future.get();
           futures.clear();
-          if (numFinished.fetch_add(200) % 10000 == 0) {
+          if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
             std::cout << "Finished " << numFinished.load() << std::endl;
           }
         }
@@ -435,6 +441,7 @@ int add_followers() {
 }
 
 int warmup_posts() {
+  const int BATCH_SIZE = 100;
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
   std::vector<std::thread> thds;
@@ -451,11 +458,11 @@ int warmup_posts() {
           return 0;
         }));
 
-        if (futures.size() % 100 == 0) {
+        if (futures.size() % BATCH_SIZE == 0) {
           for (auto &future : futures)
             future.get();
           futures.clear();
-          if (numFinished.fetch_add(100) % 10000 == 0) {
+          if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
               std::cout << "Finished users: " << numFinished.load()
                         << std::endl;
           }
@@ -485,7 +492,7 @@ int do_work() {
   for (int tid = 0; tid < 1; tid++) {
     thds.push_back(std::thread([]() {
       std::vector<std::future<int>> futures;
-      for (int i = 0; i < 1000000; i++) {
+      for (int i = 0; i < kPerThdWorkload; i++) {
         futures.push_back(std::async(std::launch::async, []() {
           ReadUserTimeline();
           // ReadHomeTimeline();
@@ -511,10 +518,12 @@ int do_work() {
   }
 
   auto end = std::chrono::high_resolution_clock::now();
-  std::cout << "Duration: "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
-                   .count()
-            << "ms" << std::endl;
+  auto dur =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - stt).count();
+  std::cout << "Duration: " << dur << " ms" << std::endl;
+
+  std::cout << "Throughput: " << 1.0 * kPerThdWorkload / dur << " Kops"
+            << std::endl;
 
   return 0;
 }
