@@ -13,6 +13,7 @@ start_docker() {
     if [[ ! $docker_running ]]
     then
         docker run -d -it --name ${CONTAINER_NAME} \
+            -v /dev/shm:/dev/shm \
             -v ${MIDAS_DIR}:/midas \
             -v ${ROOT_DIR}:${ROOT_DIR} \
             -v ${ROOT_DIR}/services:/services \
