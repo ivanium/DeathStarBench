@@ -5,6 +5,10 @@ build
 */wrk2/obj
 */wrk2/wrk
 
+socialNetwork/services
+socialNetwork/dbs
+socialNetwork/bench
+
 **/.clangd
 **/.cache
 
