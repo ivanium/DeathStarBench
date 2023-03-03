@@ -312,3 +312,16 @@ services:
     restart: always
     environment:
       - COLLECTOR_ZIPKIN_HTTP_PORT=9411
+
+  yifan-client:
+    image: socialnet_buildbase:latest
+    hostname: yifan-client
+    #    ports:
+    #      - 10009:9090
+    restart: always
+    command: "tail -f /dev/null"
+    volumes:
+      - /dev/shm:/dev/shm
+      - ./services:/services
+      - ./datasets:/datasets
+      - ./config:/config
