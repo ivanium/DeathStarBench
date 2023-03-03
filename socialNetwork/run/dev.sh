@@ -3,14 +3,17 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
+MIDAS_DIR=$HOME/code/cachebank
+
 IMAGE_NAME=socialnet_buildbase
-CONTAINER_NAME=socialnet_buildbase
+CONTAINER_NAME=${IMAGE_NAME}
 
 start_docker() {
-    docker_running=$(docker ps --format '{{.Names}}' | grep socialnet_buildbase)
+    docker_running=$(docker ps --format '{{.Names}}' | grep ${CONTAINER_NAME})
     if [[ ! $docker_running ]]
     then
         docker run -d -it --name ${CONTAINER_NAME} \
+            -v ${MIDAS_DIR}:/midas \
             -v ${ROOT_DIR}:${ROOT_DIR} \
             -v ${ROOT_DIR}/services:/services \
             -v ${ROOT_DIR}/config:/config \
