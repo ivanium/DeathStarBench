@@ -36,6 +36,13 @@ endif()
 #    /usr/local/lib/libtacopie.a)
 
 
+# Midas
+set(MIDAS_PREFIX      "/midas/bindings/c")
+set(MIDAS_INCLUDE_DIR "${MIDAS_PREFIX}/include")
+set(MIDAS_LIB_DIR     "${MIDAS_PREFIX}/lib")
+set(MIDAS_LIBS        "${MIDAS_LIB_DIR}/libmidas.a")
+include_directories(${MIDAS_INCLUDE_DIR})
+link_directories(${MIDAS_LIB_DIR})
 
 set(THRIFT_GEN_CPP_DIR ../../gen-cpp)
 

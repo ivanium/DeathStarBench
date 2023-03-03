@@ -15,6 +15,9 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+#include "softmem.h"
+#include "resource_manager.h"
+
 namespace social_network {
 using json = nlohmann::json;
 
@@ -43,6 +46,9 @@ PostStorageHandler::PostStorageHandler(
     mongoc_client_pool_t *mongodb_client_pool) {
   _memcached_client_pool = memcached_client_pool;
   _mongodb_client_pool = mongodb_client_pool;
+
+  // auto manager = midas_get_global_manager();
+  // std::cerr << "[Midas] get global manager @ " << manager << std::endl;
 }
 
 void PostStorageHandler::StorePost(
