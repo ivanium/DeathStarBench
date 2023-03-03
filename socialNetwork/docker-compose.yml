@@ -22,6 +22,8 @@ services:
     # ports:
     #   - 27018:27017
     restart: always
+    volumes:
+      - ./dbs/social-graph-mongodb-1/db:/data/db
 
   social-graph-redis:
     image: redis
@@ -80,6 +82,8 @@ services:
     #    ports:
     #      - 27019:27017
     restart: always
+    volumes:
+      - ./dbs/post-storage-mongodb-1/db:/data/db
 
   user-timeline-service:
     image: socialnet_buildbase:latest
@@ -110,6 +114,8 @@ services:
     #    ports:
     #      - 27020:27017
     restart: always
+    volumes:
+      - ./dbs/user-timeline-mongodb-1/db:/data/db
 
   url-shorten-service:
     image: socialnet_buildbase:latest
@@ -140,6 +146,8 @@ services:
     #    ports:
     #      - 27021:27017
     restart: always
+    volumes:
+      - ./dbs/url-shorten-mongodb-1/db:/data/db
 
   user-service:
     image: socialnet_buildbase:latest
@@ -170,6 +178,8 @@ services:
     # ports:
     #   - 27023:27017
     restart: always
+    volumes:
+      - ./dbs/user-mongodb-1/db:/data/db
 
   media-service:
     image: socialnet_buildbase:latest
@@ -200,6 +210,8 @@ services:
     #    ports:
     #      - 27024:27017
     restart: always
+    volumes:
+      - ./dbs/media-mongodb-1/db:/data/db
 
   text-service:
     image: socialnet_buildbase:latest
