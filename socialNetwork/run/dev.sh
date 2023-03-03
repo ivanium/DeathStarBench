@@ -19,10 +19,6 @@ start_docker() {
             -v ${ROOT_DIR}/services:/services \
             -v ${ROOT_DIR}/config:/config \
             ${IMAGE_NAME} /bin/bash
-        # docker run -d -it --name ${CONTAINER_NAME} \
-        #     -v $(pwd)/services:/services \
-        #     -v $(pwd)/config:/config \
-        #     ${IMAGE_NAME} /bin/bash
     fi
 }
 
