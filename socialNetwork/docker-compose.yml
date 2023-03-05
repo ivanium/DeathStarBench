@@ -13,6 +13,7 @@ services:
     # restart: always
     entrypoint: /services/SocialGraphService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -23,6 +24,7 @@ services:
     #   - 27018:27017
     restart: always
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/social-graph-mongodb-1/db:/data/db
     # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
 
@@ -40,8 +42,9 @@ services:
     #   - 6381:6379
     restart: always
     # command: "redis-server /social-network-microservices/config/yifan-redis.conf"
-    # volumes:
-    #   - ./config:/social-network-microservices/config
+    volumes:
+      - /dev/shm:/dev/shm
+      # - ./config:/social-network-microservices/config
 
   compose-post-service:
     image: socialnet_buildbase:latest
@@ -54,6 +57,7 @@ services:
         condition: service_started
     entrypoint: /services/ComposePostService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -70,6 +74,7 @@ services:
         condition: service_started
     entrypoint: /services/PostStorageService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -93,6 +98,7 @@ services:
     restart: always
     # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/post-storage-mongodb-1/db:/data/db
 
   user-timeline-service:
@@ -108,6 +114,7 @@ services:
         condition: service_started
     entrypoint: /services/UserTimelineService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -119,6 +126,7 @@ services:
     restart: always
     command: "redis-server /social-network-microservices/config/yifan-redis.conf"
     volumes:
+      - /dev/shm:/dev/shm
       - ./config:/social-network-microservices/config
 
 
@@ -130,6 +138,7 @@ services:
     restart: always
     # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/user-timeline-mongodb-1/db:/data/db
 
   url-shorten-service:
@@ -145,6 +154,7 @@ services:
       url-shorten-mongodb:
         condition: service_started
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -168,6 +178,7 @@ services:
     restart: always
     # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/url-shorten-mongodb-1/db:/data/db
 
   user-service:
@@ -183,6 +194,7 @@ services:
         condition: service_started
     entrypoint: /services/UserService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -205,6 +217,7 @@ services:
     #   - 27023:27017
     restart: always
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/user-mongodb-1/db:/data/db
 
   media-service:
@@ -220,6 +233,7 @@ services:
     restart: always
     entrypoint: /services/MediaService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -242,6 +256,7 @@ services:
     #      - 27024:27017
     restart: always
     volumes:
+      - /dev/shm:/dev/shm
       - ./dbs/media-mongodb-1/db:/data/db
 
   text-service:
@@ -255,6 +270,7 @@ services:
         condition: service_started
     entrypoint: /services/TextService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -269,6 +285,7 @@ services:
         condition: service_started
     entrypoint: /services/UniqueIdService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -283,6 +300,7 @@ services:
     restart: always
     entrypoint: /services/UserMentionService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
@@ -297,6 +315,7 @@ services:
     restart: always
     entrypoint: /services/HomeTimelineService
     volumes:
+      - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
 
