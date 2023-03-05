@@ -156,6 +156,7 @@ struct SocialNetState {
         new std::uniform_int_distribution<>(0, kMaxNumMediasPerText));
     this->dist_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
         0, std::numeric_limits<int64_t>::max()));
+    return 0;
   }
 } state;
 
