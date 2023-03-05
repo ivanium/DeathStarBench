@@ -481,8 +481,7 @@ void PostStorageHandler::ReadPosts(
     for (auto &it : post_json_map) {
       if (post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
                                  it.second.length()))
-        LOG(debug) << "Failed to set post " << it.first << " to midas, ret "
-                   << ret;
+        LOG(debug) << "Failed to set post " << it.first << " to midas";
     }
   }
 
