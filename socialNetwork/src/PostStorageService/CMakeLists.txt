@@ -14,7 +14,6 @@ target_include_directories(
 
 target_link_libraries(
     PostStorageService
-    libmidas.a rt pthread # [Midas] lib and dependent libs
     ${MONGOC_LIBRARIES}
     ${LIBMEMCACHED_LIBRARIES}
     nlohmann_json::nlohmann_json
@@ -24,6 +23,7 @@ target_link_libraries(
     Boost::log
     Boost::log_setup
     jaegertracing
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS PostStorageService DESTINATION ./)

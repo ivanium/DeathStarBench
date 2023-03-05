@@ -8,6 +8,8 @@ find_package(Threads)
 find_package(OpenSSL REQUIRED)
 find_package(amqpcpp REQUIRED)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost 1.54.0 REQUIRED COMPONENTS log log_setup program_options)
 if(Boost_FOUND)
@@ -37,10 +39,10 @@ endif()
 
 
 # Midas
-set(MIDAS_PREFIX      "/midas/bindings/c")
-set(MIDAS_INCLUDE_DIR "${MIDAS_PREFIX}/include")
+set(MIDAS_PREFIX      "/midas")
+set(MIDAS_INCLUDE_DIR "${MIDAS_PREFIX}/inc")
 set(MIDAS_LIB_DIR     "${MIDAS_PREFIX}/lib")
-set(MIDAS_LIBS        "${MIDAS_LIB_DIR}/libmidas.a")
+set(MIDAS_LIBS        "${MIDAS_LIB_DIR}/libmidas++.a")
 include_directories(${MIDAS_INCLUDE_DIR})
 link_directories(${MIDAS_LIB_DIR})
 
