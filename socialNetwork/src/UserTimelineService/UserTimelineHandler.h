@@ -15,6 +15,12 @@
 #include "../ThriftClient.h"
 #include "../logger.h"
 #include "../tracing.h"
+#include "../PostUtils.h"
+
+// [Midas]
+#include "resource_manager.hpp"
+#include "sync_kv.hpp"
+constexpr static int kNumBuckets = 1 << 20;
 
 using namespace sw::redis;
 
@@ -36,6 +42,7 @@ class UserTimelineHandler : public UserTimelineServiceIf {
                         const std::map<std::string, std::string> &) override;
 
  private:
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> post_cache;
   Redis *_redis_client_pool;
   RedisCluster *_redis_cluster_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
@@ -45,6 +52,9 @@ class UserTimelineHandler : public UserTimelineServiceIf {
 UserTimelineHandler::UserTimelineHandler(
     Redis *redis_pool, mongoc_client_pool_t *mongodb_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool) {
+  auto rmanager = midas::ResourceManager::global_manager();
+  LOG(error) << "Get midas rmanager @ " << rmanager;
+  post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
   _redis_client_pool = redis_pool;
   _redis_cluster_client_pool = nullptr;
   _mongodb_client_pool = mongodb_pool;
@@ -265,28 +275,59 @@ void UserTimelineHandler::ReadUserTimeline(
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
   }
 
-  std::future<std::vector<Post>> post_future =
-      std::async(std::launch::async, [&]() {
-        auto post_client_wrapper = _post_client_pool->Pop();
-        if (!post_client_wrapper) {
-          ServiceException se;
-          se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-          se.message = "Failed to connect to post-storage-service";
-          throw se;
-        }
-        std::vector<Post> _return_posts;
-        auto post_client = post_client_wrapper->GetClient();
-        try {
-          post_client->ReadPosts(_return_posts, req_id, post_ids,
-                                 writer_text_map);
-        } catch (...) {
-          _post_client_pool->Remove(post_client_wrapper);
-          LOG(error) << "Failed to read posts from post-storage-service";
-          throw;
-        }
-        _post_client_pool->Keepalive(post_client_wrapper);
-        return _return_posts;
-      });
+  // midas query cache
+  std::set<int64_t> post_ids_not_cached(post_ids.begin(), post_ids.end());
+  if (post_ids_not_cached.size() != post_ids.size()) {
+    LOG(error)<< "Post_ids are duplicated";
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_HANDLER_ERROR;
+    se.message = "Post_ids are duplicated";
+    throw se;
+  }
+  std::map<int64_t, Post> return_map;
+  for (auto &post_id : post_ids) {
+    size_t post_len = 0;
+    char *post_store = reinterpret_cast<char *>(
+        post_cache->get(&post_id, sizeof(post_id), &post_len));
+    if (post_store) {
+      Post new_post;
+      json post_json = json::parse(
+          std::string(post_store, post_store + post_len));
+      json_utils::JsonToPost(post_json, new_post);
+      return_map.insert(std::make_pair(new_post.post_id, new_post));
+      // filter out
+      post_ids_not_cached.erase(new_post.post_id);
+      free(post_store);
+    }
+  }
+
+  std::future<std::vector<Post>> post_future;
+  if (!post_ids_not_cached.empty()) {
+    post_future =
+        std::async(std::launch::async, [&]() {
+          auto post_client_wrapper = _post_client_pool->Pop();
+          if (!post_client_wrapper) {
+            ServiceException se;
+            se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+            se.message = "Failed to connect to post-storage-service";
+            throw se;
+          }
+          std::vector<Post> _return_posts;
+          auto post_client = post_client_wrapper->GetClient();
+          try {
+            std::vector<int64_t> post_ids_(post_ids_not_cached.begin(),
+                                           post_ids_not_cached.end());
+            post_client->ReadPosts(_return_posts, req_id, post_ids_,
+                                   writer_text_map);
+          } catch (...) {
+            _post_client_pool->Remove(post_client_wrapper);
+            LOG(error) << "Failed to read posts from post-storage-service";
+            throw;
+          }
+          _post_client_pool->Keepalive(post_client_wrapper);
+          return _return_posts;
+        });
+  }
 
   if (redis_update_map.size() > 0) {
     auto redis_update_span = opentracing::Tracer::Global()->StartSpan(
@@ -309,12 +350,33 @@ void UserTimelineHandler::ReadUserTimeline(
     redis_update_span->Finish();
   }
 
-  try {
-    _return = post_future.get();
-  } catch (...) {
-    LOG(error) << "Failed to get post from post-storage-service";
-    throw;
+  if (!post_ids_not_cached.empty()) {
+    try {
+      // merge
+      auto posts_not_cached = post_future.get();
+      for (auto &post : posts_not_cached) {
+        return_map.insert(std::make_pair(post.post_id, post));
+
+        json post_json;
+        json_utils::PostToJson(post, post_json);
+        std::string post_json_str = post_json.dump();
+        int64_t post_id = post.post_id;
+        if (!post_cache->set(&post_id, sizeof(post_id), post_json_str.c_str(),
+                             post_json_str.length()))
+          LOG(error) << "Failed to set post " << post.post_id << " into Midas";
+      }
+    } catch (...) {
+      LOG(error) << "Failed to get post from post-storage-service";
+      throw;
+    }
   }
+  if (return_map.size() < post_ids.size())
+    LOG(error) << "Failed to get all posts!";
+  std::vector<Post> return_vec;
+  for (auto &post_id : post_ids) {
+    return_vec.emplace_back(return_map[post_id]);
+  }
+  _return = return_vec;
   span->Finish();
 }
 
