@@ -297,12 +297,9 @@ void PostStorageHandler::ReadPost(
       mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
       // upload post to midas
-      // LOG(debug) << "YIFAN: Post_id: " << post_id << " is inserted into midas";
-      bool ret = post_cache->set(&post_id, sizeof(post_id), post_json_char,
-                                 std::strlen(post_json_char));
-      if (ret)
-        LOG(warning) << "Failed to set post " << post_json_char
-                     << " to midas, ret " << ret;
+      if (!post_cache->set(&post_id, sizeof(post_id), post_json_char,
+                           std::strlen(post_json_char)))
+        LOG(debug) << "Failed to set post " << post_json_char << " to midas";
       // set_span->Finish();
       bson_free(post_json_char);
     }
@@ -479,8 +476,8 @@ void PostStorageHandler::ReadPosts(
 
     // upload posts to midas cache
     for (auto &it : post_json_map) {
-      if (post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
-                                 it.second.length()))
+      if (!post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
+                           it.second.length()))
         LOG(debug) << "Failed to set post " << it.first << " to midas";
     }
   }
