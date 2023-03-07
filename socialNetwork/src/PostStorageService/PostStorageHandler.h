@@ -14,6 +14,8 @@
 #include "../tracing.h"
 
 // [Midas]
+#include "time.hpp"
+#include "cache_manager.hpp"
 #include "sync_kv.hpp"
 constexpr static uint64_t kNumBuckets = 1 << 20;
 
@@ -35,8 +37,9 @@ class PostStorageHandler : public PostStorageServiceIf {
                  const std::vector<int64_t> &post_ids,
                  const std::map<std::string, std::string> &carrier) override;
 
- private:
-  std::shared_ptr<midas::SyncKV<kNumBuckets>> post_cache;
+private:
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _post_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
 };
 
@@ -44,7 +47,15 @@ PostStorageHandler::PostStorageHandler(
     mongoc_client_pool_t *mongodb_client_pool) {
   _mongodb_client_pool = mongodb_client_pool;
 
-  post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("posts") ||
+      (_pool = cmanager->get_pool("posts")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
 void PostStorageHandler::StorePost(
@@ -177,7 +188,7 @@ void PostStorageHandler::ReadPost(
 
   size_t post_len = 0;
   char *post_store = reinterpret_cast<char *>(
-      post_cache->get(&post_id, sizeof(post_id), &post_len));
+      _post_cache->get(&post_id, sizeof(post_id), &post_len));
   if (post_store) { // cached in midas
     // LOG(debug) << "Get post " << post_id << " cache hit from Midas";
     json post_json =
@@ -209,6 +220,7 @@ void PostStorageHandler::ReadPost(
     }
     free(post_store);
   } else { // If not cached in midas
+    auto missed_cycles_stt = midas::Time::get_cycles_stt();
     mongoc_client_t *mongodb_client =
         mongoc_client_pool_pop(_mongodb_client_pool);
     if (!mongodb_client) {
@@ -297,11 +309,14 @@ void PostStorageHandler::ReadPost(
       mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
       // upload post to midas
-      if (!post_cache->set(&post_id, sizeof(post_id), post_json_char,
+      if (!_post_cache->set(&post_id, sizeof(post_id), post_json_char,
                            std::strlen(post_json_char)))
         LOG(debug) << "Failed to set post " << post_json_char << " to midas";
       // set_span->Finish();
       bson_free(post_json_char);
+      auto missed_cycles_end = midas::Time::get_cycles_end();
+      _pool->record_miss_penalty(missed_cycles_end - missed_cycles_stt,
+                                 std::strlen(post_json_char));
     }
   }
 
@@ -338,7 +353,7 @@ void PostStorageHandler::ReadPosts(
   for (auto &post_id : post_ids) {
     size_t return_value_length = 0;
     char *return_value = reinterpret_cast<char *>(
-        post_cache->get(&post_id, sizeof(post_id), &return_value_length));
+        _post_cache->get(&post_id, sizeof(post_id), &return_value_length));
     if (return_value) {
       Post new_post;
       json post_json = json::parse(
@@ -380,6 +395,7 @@ void PostStorageHandler::ReadPosts(
 
   // Find the rest in MongoDB
   if (!post_ids_not_cached.empty()) {
+    auto missed_cycles_stt = midas::Time::get_cycles_stt();
     mongoc_client_t *mongodb_client =
         mongoc_client_pool_pop(_mongodb_client_pool);
     if (!mongodb_client) {
@@ -475,11 +491,16 @@ void PostStorageHandler::ReadPosts(
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
     // upload posts to midas cache
+    size_t missed_bytes = 0;
     for (auto &it : post_json_map) {
-      if (!post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
+      if (!_post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
                            it.second.length()))
         LOG(debug) << "Failed to set post " << it.first << " to midas";
+      missed_bytes += it.second.length();
     }
+    auto missed_cycles_end = midas::Time::get_cycles_end();
+    _pool->record_miss_penalty(missed_cycles_end - missed_cycles_stt,
+                               missed_bytes);
   }
 
   if (return_map.size() != post_ids.size()) {
