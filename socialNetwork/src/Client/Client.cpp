@@ -444,7 +444,7 @@ int add_followers() {
   return 0;
 }
 
-int warmup_posts() {
+int compose_posts() {
   const int BATCH_SIZE = 100;
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
@@ -582,17 +582,23 @@ int main(int argc, char *argv[]) {
   state.init();
 
   bool init = false;
-  if (argc > 1 && strncmp(argv[1], "init", 4) == 0)
-    init = true;
+  bool warmup = false;
+  if (argc > 1) {
+    if (strncmp(argv[1], "init", 4) == 0)
+      init = true;
+    if (strncmp(argv[1], "warmup", 6) == 0)
+      warmup = true;
+  }
   if (init) {
     reg_users();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     add_followers();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    warmup_posts();
+    compose_posts();
   }
 
-  read_posts();
+  if (warmup)
+    read_posts();
 
   for (int i = 0; i < 10; i++) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
