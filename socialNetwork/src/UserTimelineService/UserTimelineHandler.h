@@ -18,7 +18,8 @@
 #include "../PostUtils.h"
 
 // [Midas]
-#include "resource_manager.hpp"
+#include "time.hpp"
+#include "cache_manager.hpp"
 #include "sync_kv.hpp"
 constexpr static int kNumBuckets = 1 << 20;
 
@@ -41,8 +42,9 @@ class UserTimelineHandler : public UserTimelineServiceIf {
   void ReadUserTimeline(std::vector<Post> &, int64_t, int64_t, int, int,
                         const std::map<std::string, std::string> &) override;
 
- private:
-  std::shared_ptr<midas::SyncKV<kNumBuckets>> post_cache;
+private:
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _post_cache;
   Redis *_redis_client_pool;
   RedisCluster *_redis_cluster_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
@@ -52,9 +54,15 @@ class UserTimelineHandler : public UserTimelineServiceIf {
 UserTimelineHandler::UserTimelineHandler(
     Redis *redis_pool, mongoc_client_pool_t *mongodb_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool) {
-  auto rmanager = midas::ResourceManager::global_manager();
-  LOG(error) << "Get midas rmanager @ " << rmanager;
-  post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
+  auto _cmanager = midas::CacheManager::global_cache_manager();
+  if (!_cmanager->create_pool("posts") ||
+      (_pool = _cmanager->get_pool("posts")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool!";
+    throw se;
+  };
+  _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _redis_client_pool = redis_pool;
   _redis_cluster_client_pool = nullptr;
   _mongodb_client_pool = mongodb_pool;
@@ -288,7 +296,7 @@ void UserTimelineHandler::ReadUserTimeline(
   for (auto &post_id : post_ids) {
     size_t post_len = 0;
     char *post_store = reinterpret_cast<char *>(
-        post_cache->get(&post_id, sizeof(post_id), &post_len));
+        _post_cache->get(&post_id, sizeof(post_id), &post_len));
     if (post_store) {
       Post new_post;
       json post_json = json::parse(
@@ -301,6 +309,7 @@ void UserTimelineHandler::ReadUserTimeline(
     }
   }
 
+  auto missed_cycles_stt = midas::Time::get_cycles_stt();
   std::future<std::vector<Post>> post_future;
   if (!post_ids_not_cached.empty()) {
     post_future =
@@ -354,6 +363,7 @@ void UserTimelineHandler::ReadUserTimeline(
     try {
       // merge
       auto posts_not_cached = post_future.get();
+      size_t missed_bytes = 0;
       for (auto &post : posts_not_cached) {
         return_map.insert(std::make_pair(post.post_id, post));
 
@@ -361,10 +371,14 @@ void UserTimelineHandler::ReadUserTimeline(
         json_utils::PostToJson(post, post_json);
         std::string post_json_str = post_json.dump();
         int64_t post_id = post.post_id;
-        if (!post_cache->set(&post_id, sizeof(post_id), post_json_str.c_str(),
+        if (!_post_cache->set(&post_id, sizeof(post_id), post_json_str.c_str(),
                              post_json_str.length()))
           LOG(error) << "Failed to set post " << post.post_id << " into Midas";
+        missed_bytes += post_json_str.length();
       }
+      auto missed_cycles_end = midas::Time::get_cycles_end();
+      _pool->record_miss_penalty(missed_cycles_end - missed_cycles_stt,
+                                 missed_bytes);
     } catch (...) {
       LOG(error) << "Failed to get post from post-storage-service";
       throw;
