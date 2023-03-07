@@ -12,7 +12,6 @@
 #include "../tracing.h"
 #include "../utils.h"
 #include "../utils_mongodb.h"
-#include "../utils_redis.h"
 #include "../utils_thrift.h"
 #include "UserTimelineHandler.h"
 
@@ -34,7 +33,7 @@ int main(int argc, char *argv[]) {
   desc.add_options()("help", "produce help message")(
       "redis-cluster",
       po::value<bool>()->default_value(false)->implicit_value(true),
-      "Enable redis cluster mode");
+      "Enable redis cluster mode"); // [Midas] deprecated
 
   po::variables_map vm;
   po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -43,13 +42,6 @@ int main(int argc, char *argv[]) {
   if (vm.count("help")) {
     std::cout << desc << "\n";
     return 0;
-  }
-
-  bool redis_cluster_flag = false;
-  if (vm.count("redis-cluster")) {
-    if (vm["redis-cluster"].as<bool>()) {
-      redis_cluster_flag = true;
-    }
   }
 
   SetUpTracer("config/jaeger-config.yml", "user-timeline-service");
@@ -100,29 +92,12 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<TServerSocket> server_socket =
       get_server_socket(config_json, "0.0.0.0", port);
 
-  if (redis_cluster_flag) {
-    RedisCluster redis_client_pool =
-        init_redis_cluster_client_pool(config_json, "user-timeline");
-    TThreadedServer server(std::make_shared<UserTimelineServiceProcessor>(
-                               std::make_shared<UserTimelineHandler>(
-                                   &redis_client_pool, mongodb_client_pool,
-                                   &post_storage_client_pool)),
-                           server_socket,
-                           std::make_shared<TFramedTransportFactory>(),
-                           std::make_shared<TBinaryProtocolFactory>());
-    LOG(info) << "Starting the user-timeline-service server...";
-    server.serve();
-  } else {
-    Redis redis_client_pool =
-        init_redis_client_pool(config_json, "user-timeline");
-    TThreadedServer server(std::make_shared<UserTimelineServiceProcessor>(
-                               std::make_shared<UserTimelineHandler>(
-                                   &redis_client_pool, mongodb_client_pool,
-                                   &post_storage_client_pool)),
-                           server_socket,
-                           std::make_shared<TFramedTransportFactory>(),
-                           std::make_shared<TBinaryProtocolFactory>());
-    LOG(info) << "Starting the user-timeline-service server...";
-    server.serve();
-  }
+  TThreadedServer server(
+      std::make_shared<UserTimelineServiceProcessor>(
+          std::make_shared<UserTimelineHandler>(mongodb_client_pool,
+                                                &post_storage_client_pool)),
+      server_socket, std::make_shared<TFramedTransportFactory>(),
+      std::make_shared<TBinaryProtocolFactory>());
+  LOG(info) << "Starting the user-timeline-service server...";
+  server.serve();
 }

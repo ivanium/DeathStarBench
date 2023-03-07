@@ -3,7 +3,6 @@
 
 #include <bson/bson.h>
 #include <mongoc.h>
-#include <sw/redis++/redis++.h>
 
 #include <future>
 #include <iostream>
@@ -22,15 +21,11 @@
 #include "sync_kv.hpp"
 constexpr static int kNumBuckets = 1 << 20;
 
-using namespace sw::redis;
-
 namespace social_network {
 
 class UserTimelineHandler : public UserTimelineServiceIf {
- public:
-  UserTimelineHandler(Redis *, mongoc_client_pool_t *,
-                      ClientPool<ThriftClient<PostStorageServiceClient>> *);
-  UserTimelineHandler(RedisCluster *, mongoc_client_pool_t *,
+public:
+  UserTimelineHandler(mongoc_client_pool_t *,
                       ClientPool<ThriftClient<PostStorageServiceClient>> *);
   ~UserTimelineHandler() override = default;
 
@@ -43,29 +38,18 @@ class UserTimelineHandler : public UserTimelineServiceIf {
 
  private:
   std::shared_ptr<midas::SyncKV<kNumBuckets>> post_cache;
-  Redis *_redis_client_pool;
-  RedisCluster *_redis_cluster_client_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> postid_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<PostStorageServiceClient>> *_post_client_pool;
 };
 
 UserTimelineHandler::UserTimelineHandler(
-    Redis *redis_pool, mongoc_client_pool_t *mongodb_pool,
+    mongoc_client_pool_t *mongodb_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool) {
   auto rmanager = midas::ResourceManager::global_manager();
   LOG(error) << "Get midas rmanager @ " << rmanager;
   post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
-  _redis_client_pool = redis_pool;
-  _redis_cluster_client_pool = nullptr;
-  _mongodb_client_pool = mongodb_pool;
-  _post_client_pool = post_client_pool;
-}
-
-UserTimelineHandler::UserTimelineHandler(
-    RedisCluster *redis_pool, mongoc_client_pool_t *mongodb_pool,
-    ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool) {
-  _redis_cluster_client_pool = redis_pool;
-  _redis_client_pool = nullptr;
+  postid_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
   _mongodb_client_pool = mongodb_pool;
   _post_client_pool = post_client_pool;
 }
@@ -146,18 +130,35 @@ void UserTimelineHandler::WriteUserTimeline(
   // auto redis_span = opentracing::Tracer::Global()->StartSpan(
   //     "write_user_timeline_redis_update_client",
   //     {opentracing::ChildOf(&span->context())});
-  try {
-    if (_redis_client_pool)
-      _redis_client_pool->zadd(std::to_string(user_id), std::to_string(post_id),
-                              timestamp, UpdateType::NOT_EXIST);
-    else
-      _redis_cluster_client_pool->zadd(std::to_string(user_id), std::to_string(post_id),
-                              timestamp, UpdateType::NOT_EXIST);
 
-  } catch (const Error &err) {
-    LOG(error) << err.what();
-    throw err;
+  using PostIDPair = std::pair<int64_t, double>;
+  std::vector<PostIDPair> cached_vec;
+  size_t cached_raw_len = 0;
+  PostIDPair *cached_raw = reinterpret_cast<PostIDPair *>(
+      postid_cache->get(&user_id, sizeof(user_id), &cached_raw_len));
+  if (cached_raw) {
+    size_t nr_pairs = cached_raw_len / sizeof(PostIDPair);
+    bool inserted = false;
+    bool updated = false;
+    for (int i = 0; i < nr_pairs; i++) {
+      if (cached_raw[i].first == post_id)
+        break;
+      if (inserted || cached_raw[i].second < timestamp)
+        cached_vec.emplace_back(cached_raw[i]);
+      else {
+        cached_vec.emplace_back(std::make_pair(post_id, (double)timestamp));
+        inserted = true;
+        updated = true;
+      }
+    }
+    free(cached_raw);
+    cached_raw = nullptr;
+    if (updated)
+      if (!postid_cache->set(&user_id, sizeof(user_id), cached_vec.data(),
+                             cached_vec.size() * sizeof(cached_vec[0])))
+        LOG(warning) << "Midas postid cache set failed for user " << user_id;
   }
+
   // redis_span->Finish();
   // span->Finish();
 }
@@ -182,28 +183,24 @@ void UserTimelineHandler::ReadUserTimeline(
       "read_user_timeline_redis_find_client",
       {opentracing::ChildOf(&span->context())});
 
-  std::vector<std::string> post_ids_str;
-  try {
-    if (_redis_client_pool)
-      _redis_client_pool->zrevrange(std::to_string(user_id), start, stop - 1,
-                                  std::back_inserter(post_ids_str));
-    else
-      _redis_cluster_client_pool->zrevrange(std::to_string(user_id), start, stop - 1,
-                                  std::back_inserter(post_ids_str));
-  } catch (const Error &err) {
-    LOG(error) << err.what();
-    throw err;
-  }
-  redis_span->Finish();
-
   std::vector<int64_t> post_ids;
-  for (auto &post_id_str : post_ids_str) {
-    post_ids.emplace_back(std::stoul(post_id_str));
+  using PostIDPair = std::pair<int64_t, double>;
+  size_t cached_ids_len = 0;
+  PostIDPair *cached_ids = reinterpret_cast<PostIDPair *>(
+      postid_cache->get(&user_id, sizeof(user_id), &cached_ids_len));
+  if (cached_ids) {
+    size_t nr_pairs = cached_ids_len / sizeof(PostIDPair);
+    for (int i = start; i < stop && i < nr_pairs; i++)
+      post_ids.emplace_back(cached_ids[i].first);
+    if (stop <= nr_pairs) { // all post_ids are cached so no update needed
+      free(cached_ids);
+      cached_ids = nullptr;
+    }
   }
 
   // find in mongodb
   int mongo_start = start + post_ids.size();
-  std::unordered_map<std::string, double> redis_update_map;
+  std::vector<PostIDPair> update_pairs;
   if (mongo_start < stop) {
     // Instead find post_ids from mongodb
     mongoc_client_t *mongodb_client =
@@ -261,8 +258,8 @@ void UserTimelineHandler::ReadUserTimeline(
             post_ids.emplace_back(curr_post_id);
           }
         }
-        redis_update_map.insert(std::make_pair(std::to_string(curr_post_id),
-                                               (double)curr_timestamp));
+        update_pairs.emplace_back(
+            std::make_pair(curr_post_id, (double)curr_timestamp));
         bson_iter_init(&iter_0, doc);
         bson_iter_init(&iter_1, doc);
         idx++;
@@ -329,25 +326,33 @@ void UserTimelineHandler::ReadUserTimeline(
         });
   }
 
-  if (redis_update_map.size() > 0) {
-    auto redis_update_span = opentracing::Tracer::Global()->StartSpan(
-        "user_timeline_redis_update_client",
-        {opentracing::ChildOf(&span->context())});
-    try {
-      if (_redis_client_pool)
-        _redis_client_pool->zadd(std::to_string(user_id),
-                               redis_update_map.begin(),
-                               redis_update_map.end());
-      else
-        _redis_cluster_client_pool->zadd(std::to_string(user_id),
-                               redis_update_map.begin(),
-                               redis_update_map.end());
-
-    } catch (const Error &err) {
-      LOG(error) << err.what();
-      throw err;
+  if (update_pairs.size() > 0) {
+    std::vector<PostIDPair> cached_pairs;
+    if (cached_ids) {
+      size_t nr_pairs = cached_ids_len / sizeof(PostIDPair);
+      std::sort(
+          update_pairs.begin(), update_pairs.end(),
+          [](PostIDPair &p1, PostIDPair &p2) { return p1.second < p2.second; });
+      for (int i = 0, j = 0; i < nr_pairs;) {
+        cached_pairs.emplace_back(cached_ids[i]);
+      }
+      free(cached_ids);
+      cached_ids = nullptr;
     }
-    redis_update_span->Finish();
+    std::vector<PostIDPair> merged_pairs;
+    merged_pairs.reserve(update_pairs.size() + cached_pairs.size());
+    std::merge(
+        cached_pairs.begin(), cached_pairs.end(), update_pairs.begin(),
+        update_pairs.end(), std::back_inserter(merged_pairs),
+        [](PostIDPair &p1, PostIDPair &p2) { return p1.second < p2.second; });
+    // postid_cache->remove(&user_id, sizeof(user_id));
+    if (!postid_cache->set(&user_id, sizeof(user_id), merged_pairs.data(),
+                           merged_pairs.size() * sizeof(merged_pairs[0])))
+      LOG(warning) << "Midas postid cache set failed for user " << user_id;
+  }
+  if (cached_ids) {
+    free(cached_ids);
+    cached_ids = nullptr;
   }
 
   if (!post_ids_not_cached.empty()) {
