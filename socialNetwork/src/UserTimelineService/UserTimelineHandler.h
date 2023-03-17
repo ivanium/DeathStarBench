@@ -18,9 +18,10 @@
 #include "../PostUtils.h"
 
 // [Midas]
-#include "time.hpp"
 #include "cache_manager.hpp"
+#include "resource_manager.hpp"
 #include "sync_kv.hpp"
+#include "time.hpp"
 constexpr static int kNumBuckets = 1 << 20;
 
 using namespace sw::redis;
@@ -54,15 +55,10 @@ private:
 UserTimelineHandler::UserTimelineHandler(
     Redis *redis_pool, mongoc_client_pool_t *mongodb_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool) {
-  auto _cmanager = midas::CacheManager::global_cache_manager();
-  if (!_cmanager->create_pool("posts") ||
-      (_pool = _cmanager->get_pool("posts")) == nullptr) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
-    se.message = "Failed to create midas cache pool!";
-    throw se;
-  };
-  _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+  auto _rmanager = midas::ResourceManager::global_manager();
+  _rmanager->UpdateLimit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _pool = midas::CachePool::global_cache_pool();
+  _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>();
   _redis_client_pool = redis_pool;
   _redis_cluster_client_pool = nullptr;
   _mongodb_client_pool = mongodb_pool;
