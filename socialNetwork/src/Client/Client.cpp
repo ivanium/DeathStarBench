@@ -25,6 +25,7 @@
 #include "../ThriftClient.h"
 #include "../utils.h"
 #include "../utils_thrift.h"
+#include "zipf.hpp"
 
 using apache::thrift::protocol::TBinaryProtocolFactory;
 using apache::thrift::server::TThreadedServer;
@@ -42,6 +43,8 @@ constexpr static uint32_t kMaxNumUrlsPerText = 2;
 constexpr static uint32_t kMaxNumMediasPerText = 2;
 constexpr static uint32_t kNumThd = 4;
 constexpr static uint32_t kPerThdWorkload = 100000;
+constexpr static bool kSkewed = false;
+constexpr static float kSkewness = 0.99;
 
 constexpr static char kDatasetPath[] = "/datasets/social-graph";
 constexpr static char kDatasetName[] = "soc-twitter-follows-mun";
@@ -95,13 +98,14 @@ struct SocialNetState {
 
   std::random_device rd;
   std::unique_ptr<std::mt19937> gen;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_1_100;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_1_numusers;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_0_charsetsize;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_0_maxnummentions;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_0_maxnumurls;
-  std::unique_ptr<std::uniform_int_distribution<>> dist_0_maxnummedias;
-  std::unique_ptr<std::uniform_int_distribution<int64_t>> dist_0_maxint64;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_100;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers;
+  std::unique_ptr<zipf_table_distribution<>> zipf_0_numusers_1;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnummentions;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnumurls;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnummedias;
+  std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64;
 
   int64_t getNumUsers() {
     return graph.numUsers;
@@ -143,18 +147,20 @@ struct SocialNetState {
     loadGraph();
 
     this->gen.reset(new std::mt19937((this->rd)()));
-    this->dist_1_100.reset(new std::uniform_int_distribution<>(1, 100));
-    this->dist_1_numusers.reset(
+    this->uniform_1_100.reset(new std::uniform_int_distribution<>(1, 100));
+    this->uniform_1_numusers.reset(
         new std::uniform_int_distribution<>(1, getNumUsers()));
-    this->dist_0_charsetsize.reset(
+    this->zipf_0_numusers_1.reset(
+        new zipf_table_distribution<>(getNumUsers(), kSkewness));
+    this->uniform_0_charsetsize.reset(
         new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
-    this->dist_0_maxnummentions.reset(
+    this->uniform_0_maxnummentions.reset(
         new std::uniform_int_distribution<>(0, kMaxNumMentionsPerText));
-    this->dist_0_maxnumurls.reset(
+    this->uniform_0_maxnumurls.reset(
         new std::uniform_int_distribution<>(0, kMaxNumUrlsPerText));
-    this->dist_0_maxnummedias.reset(
+    this->uniform_0_maxnummedias.reset(
         new std::uniform_int_distribution<>(0, kMaxNumMediasPerText));
-    this->dist_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
+    this->uniform_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
         0, std::numeric_limits<int64_t>::max()));
     return 0;
   }
@@ -163,7 +169,7 @@ struct SocialNetState {
 std::string random_string(uint32_t len, const SocialNetState &state) {
   std::string str = "";
   for (uint32_t i = 0; i < kTextLen; i++) {
-    auto idx = (*state.dist_0_charsetsize)(*state.gen);
+    auto idx = (*state.uniform_0_charsetsize)(*state.gen);
     str += kCharSet[idx];
   }
   return str;
@@ -234,24 +240,24 @@ int ComposePost(int64_t user_id) {
   std::map<std::string, std::string> carrier;
 
   int64_t req_id = random_int64();
-  // int64_t user_id = (*state.dist_1_numusers)(*state.gen);
+  // int64_t user_id = (*state.uniform_1_numusers)(*state.gen);
   std::string username = std::string("username_") + std::to_string(user_id);
   std::string text = random_string(kTextLen, state);
-  int num_user_mentions = (*state.dist_0_maxnummentions)(*state.gen);
+  int num_user_mentions = (*state.uniform_0_maxnummentions)(*state.gen);
   for (uint32_t i = 0; i < num_user_mentions; i++) {
-    auto mentioned_id = (*state.dist_1_numusers)(*state.gen);
+    auto mentioned_id = (*state.uniform_1_numusers)(*state.gen);
     text += " @username_" + std::to_string(mentioned_id);
   }
-  auto num_urls = (*state.dist_0_maxnumurls)(*state.gen);
+  auto num_urls = (*state.uniform_0_maxnumurls)(*state.gen);
   for (uint32_t i = 0; i < num_urls; i++) {
     text += " http://" + random_string(kUrlLen, state);
   }
-  int num_medias = (*state.dist_0_maxnummedias)(*state.gen);
+  int num_medias = (*state.uniform_0_maxnummedias)(*state.gen);
 
   std::vector<int64_t> media_ids;
   std::vector<std::string> media_types;
   for (uint32_t i = 0; i < num_medias; i++) {
-    media_ids.emplace_back((*state.dist_0_maxint64)(*state.gen));
+    media_ids.emplace_back((*state.uniform_0_maxint64)(*state.gen));
     media_types.push_back("png");
   }
   social_network::PostType::type post_type = social_network::PostType::POST;
@@ -281,13 +287,14 @@ int ComposePost(int64_t user_id) {
 int ReadUserTimeline(int64_t user_id = -1) {
   std::map<std::string, std::string> carrier;
   if (user_id == -1)
-    user_id = (*state.dist_1_numusers)(*state.gen);
+    user_id = kSkewed ? ((*state.zipf_0_numusers_1)(*state.gen) + 1)
+                      : (*state.uniform_1_numusers)(*state.gen);
   int64_t req_id = random_int64();
   int64_t start = 0;
   int64_t stop = 20;
   // int64_t start = 0;
-  // int64_t stop = (*state.dist_1_100)(*state.gen);
-  // int64_t start = (*state.dist_1_100)(*state.gen) % 20;
+  // int64_t stop = (*state.uniform_1_100)(*state.gen);
+  // int64_t start = (*state.uniform_1_100)(*state.gen) % 20;
   // int64_t stop = start + 1;
   std::vector<social_network::Post> ret;
 
@@ -313,11 +320,11 @@ int ReadUserTimeline(int64_t user_id = -1) {
 
 int ReadHomeTimeline() {
   std::map<std::string, std::string> carrier;
-  int64_t user_id = (*state.dist_1_numusers)(*state.gen);
+  int64_t user_id = (*state.uniform_1_numusers)(*state.gen);
   int64_t req_id = random_int64();
   // int64_t start = 0;
-  // int64_t stop = (*state.dist_1_100)(*state.gen);
-  int64_t start = (*state.dist_1_100)(*state.gen) % 10;
+  // int64_t stop = (*state.uniform_1_100)(*state.gen);
+  int64_t start = (*state.uniform_1_100)(*state.gen) % 10;
   int64_t stop = start + 1;
   std::vector<social_network::Post> ret;
 
@@ -493,7 +500,7 @@ int compose_posts() {
 int read_posts() {
   const int BATCH_SIZE = 100;
   auto stt = std::chrono::high_resolution_clock::now();
-  std::cout << "Start reading posts (user timeslines)..." << std::endl;
+  std::cout << "Start reading posts (user timelines)..." << std::endl;
   std::atomic<int64_t> numFinished { 0 };
   std::vector<std::thread> thds;
   for (int tid = 0; tid < kNumThd; tid++) {
