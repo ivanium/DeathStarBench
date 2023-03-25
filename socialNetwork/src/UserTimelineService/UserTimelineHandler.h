@@ -295,10 +295,12 @@ void UserTimelineHandler::ReadUserTimeline(
     throw se;
   }
   std::map<int64_t, Post> return_map;
+  midas::kv_types::BatchPlug plug;
+  _post_cache->batch_stt(plug);
   for (auto &post_id : post_ids) {
     size_t post_len = 0;
     char *post_store = reinterpret_cast<char *>(
-        _post_cache->get(&post_id, sizeof(post_id), &post_len));
+        _post_cache->bget_single(&post_id, sizeof(post_id), &post_len, plug));
     if (post_store) {
       Post new_post;
       json post_json = json::parse(
@@ -310,6 +312,7 @@ void UserTimelineHandler::ReadUserTimeline(
       free(post_store);
     }
   }
+  _post_cache->batch_end(plug);
 
   auto missed_cycles_stt = midas::Time::get_cycles_stt();
   std::future<std::vector<Post>> post_future;

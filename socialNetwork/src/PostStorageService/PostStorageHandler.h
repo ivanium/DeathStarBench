@@ -352,10 +352,12 @@ void PostStorageHandler::ReadPosts(
   }
   std::map<int64_t, Post> return_map;
 
+  midas::kv_types::BatchPlug plug;
+  _post_cache->batch_stt(plug);
   for (auto &post_id : post_ids) {
     size_t return_value_length = 0;
-    char *return_value = reinterpret_cast<char *>(
-        _post_cache->get(&post_id, sizeof(post_id), &return_value_length));
+    char *return_value = reinterpret_cast<char *>(_post_cache->bget_single(
+        &post_id, sizeof(post_id), &return_value_length, plug));
     if (return_value) {
       Post new_post;
       json post_json = json::parse(
@@ -390,6 +392,7 @@ void PostStorageHandler::ReadPosts(
       free(return_value);
     }
   }
+  _post_cache->batch_end(plug);
 
   std::map<int64_t, std::string> post_json_map;
 
