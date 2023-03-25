@@ -374,8 +374,9 @@ void UserTimelineHandler::ReadUserTimeline(
         std::string post_json_str = post_json.dump();
         int64_t post_id = post.post_id;
         if (!_post_cache->set(&post_id, sizeof(post_id), post_json_str.c_str(),
-                             post_json_str.length()))
-          LOG(error) << "Failed to set post " << post.post_id << " into Midas";
+                              post_json_str.length())) {
+          // LOG(error) << "Failed to set post " << post.post_id << " into Midas";
+        }
         missed_bytes += post_json_str.length();
       }
       auto missed_cycles_end = midas::Time::get_cycles_end();

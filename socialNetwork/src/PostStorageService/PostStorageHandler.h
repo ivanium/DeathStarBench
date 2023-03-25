@@ -311,8 +311,9 @@ void PostStorageHandler::ReadPost(
 
       // upload post to midas
       if (!_post_cache->set(&post_id, sizeof(post_id), post_json_char,
-                           std::strlen(post_json_char)))
-        LOG(debug) << "Failed to set post " << post_json_char << " to midas";
+                            std::strlen(post_json_char))) {
+        // LOG(debug) << "Failed to set post " << post_json_char << " to midas";
+      }
       // set_span->Finish();
       bson_free(post_json_char);
       auto missed_cycles_end = midas::Time::get_cycles_end();
@@ -495,8 +496,9 @@ void PostStorageHandler::ReadPosts(
     size_t missed_bytes = 0;
     for (auto &it : post_json_map) {
       if (!_post_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
-                           it.second.length()))
-        LOG(debug) << "Failed to set post " << it.first << " to midas";
+                            it.second.length())) {
+        // LOG(debug) << "Failed to set post " << it.first << " to midas";
+      }
       missed_bytes += it.second.length();
     }
     auto missed_cycles_end = midas::Time::get_cycles_end();
