@@ -44,12 +44,13 @@ class UserTimelineHandler : public UserTimelineServiceIf {
                         const std::map<std::string, std::string> &) override;
 
 private:
-  midas::CachePool *_pool;
-  std::shared_ptr<midas::SyncKV<kNumBuckets>> _post_cache;
   Redis *_redis_client_pool;
   RedisCluster *_redis_cluster_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<PostStorageServiceClient>> *_post_client_pool;
+  // [Midas]
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _post_cache;
 };
 
 UserTimelineHandler::UserTimelineHandler(
