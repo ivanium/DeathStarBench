@@ -4,6 +4,7 @@ build
 */wrk2/deps
 */wrk2/obj
 */wrk2/wrk
+services
 
 socialNetwork/services
 socialNetwork/dbs
