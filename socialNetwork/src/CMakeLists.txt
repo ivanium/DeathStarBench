@@ -9,6 +9,10 @@ find_package(OpenSSL REQUIRED)
 find_package(amqpcpp REQUIRED)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+endif()
 
 set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost 1.54.0 REQUIRED COMPONENTS log log_setup program_options)
