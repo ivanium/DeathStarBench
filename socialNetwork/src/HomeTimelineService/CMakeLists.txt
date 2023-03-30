@@ -28,6 +28,7 @@ target_link_libraries(
     /usr/local/lib/libhiredis_ssl.a
     /usr/local/lib/libredis++.a
     OpenSSL::SSL
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS HomeTimelineService DESTINATION ./)
