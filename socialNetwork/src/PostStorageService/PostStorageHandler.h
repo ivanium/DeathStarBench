@@ -12,6 +12,7 @@
 #include "../../gen-cpp/PostStorageService.h"
 #include "../logger.h"
 #include "../tracing.h"
+#include "../PostUtils.h"
 
 // [Midas]
 #include "cache_manager.hpp"
@@ -46,7 +47,7 @@ private:
 PostStorageHandler::PostStorageHandler(
     mongoc_client_pool_t *mongodb_client_pool) {
   _mongodb_client_pool = mongodb_client_pool;
-
+  // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
   if (!cmanager->create_pool("posts") ||
       (_pool = cmanager->get_pool("posts")) == nullptr) {
@@ -192,33 +193,10 @@ void PostStorageHandler::ReadPost(
       _post_cache->get(&post_id, sizeof(post_id), &post_len));
   if (post_store) { // cached in midas
     // LOG(debug) << "Get post " << post_id << " cache hit from Midas";
-    json post_json =
-        json::parse(std::string(post_store, post_store + post_len));
-    _return.req_id = post_json["req_id"];
-    _return.timestamp = post_json["timestamp"];
-    _return.post_id = post_json["post_id"];
-    _return.creator.user_id = post_json["creator"]["user_id"];
-    _return.creator.username = post_json["creator"]["username"];
-    _return.post_type = post_json["post_type"];
-    _return.text = post_json["text"];
-    for (auto &item : post_json["media"]) {
-      Media media;
-      media.media_id = item["media_id"];
-      media.media_type = item["media_type"];
-      _return.media.emplace_back(media);
-    }
-    for (auto &item : post_json["user_mentions"]) {
-      UserMention user_mention;
-      user_mention.username = item["username"];
-      user_mention.user_id = item["user_id"];
-      _return.user_mentions.emplace_back(user_mention);
-    }
-    for (auto &item : post_json["urls"]) {
-      Url url;
-      url.shortened_url = item["shortened_url"];
-      url.expanded_url = item["expanded_url"];
-      _return.urls.emplace_back(url);
-    }
+    Post new_post;
+    json post_json = json::parse(
+        std::string(post_store, post_store + post_len));
+    json_utils::JsonToPost(post_json, _return);
     free(post_store);
   } else { // If not cached in midas
     auto missed_cycles_stt = midas::Time::get_cycles_stt();
@@ -279,31 +257,7 @@ void PostStorageHandler::ReadPost(
       LOG(debug) << "Post_id: " << post_id << " found in MongoDB";
       auto post_json_char = bson_as_json(doc, nullptr);
       json post_json = json::parse(post_json_char);
-      _return.req_id = post_json["req_id"];
-      _return.timestamp = post_json["timestamp"];
-      _return.post_id = post_json["post_id"];
-      _return.creator.user_id = post_json["creator"]["user_id"];
-      _return.creator.username = post_json["creator"]["username"];
-      _return.post_type = post_json["post_type"];
-      _return.text = post_json["text"];
-      for (auto &item : post_json["media"]) {
-        Media media;
-        media.media_id = item["media_id"];
-        media.media_type = item["media_type"];
-        _return.media.emplace_back(media);
-      }
-      for (auto &item : post_json["user_mentions"]) {
-        UserMention user_mention;
-        user_mention.username = item["username"];
-        user_mention.user_id = item["user_id"];
-        _return.user_mentions.emplace_back(user_mention);
-      }
-      for (auto &item : post_json["urls"]) {
-        Url url;
-        url.shortened_url = item["shortened_url"];
-        url.expanded_url = item["expanded_url"];
-        _return.urls.emplace_back(url);
-      }
+      json_utils::JsonToPost(post_json, _return);
       bson_destroy(query);
       mongoc_cursor_destroy(cursor);
       mongoc_collection_destroy(collection);
@@ -362,31 +316,7 @@ void PostStorageHandler::ReadPosts(
       Post new_post;
       json post_json = json::parse(
           std::string(return_value, return_value + return_value_length));
-      new_post.req_id = post_json["req_id"];
-      new_post.timestamp = post_json["timestamp"];
-      new_post.post_id = post_json["post_id"];
-      new_post.creator.user_id = post_json["creator"]["user_id"];
-      new_post.creator.username = post_json["creator"]["username"];
-      new_post.post_type = post_json["post_type"];
-      new_post.text = post_json["text"];
-      for (auto &item : post_json["media"]) {
-        Media media;
-        media.media_id = item["media_id"];
-        media.media_type = item["media_type"];
-        new_post.media.emplace_back(media);
-      }
-      for (auto &item : post_json["user_mentions"]) {
-        UserMention user_mention;
-        user_mention.username = item["username"];
-        user_mention.user_id = item["user_id"];
-        new_post.user_mentions.emplace_back(user_mention);
-      }
-      for (auto &item : post_json["urls"]) {
-        Url url;
-        url.shortened_url = item["shortened_url"];
-        url.expanded_url = item["expanded_url"];
-        new_post.urls.emplace_back(url);
-      }
+      json_utils::JsonToPost(post_json, new_post);
       return_map.insert(std::make_pair(new_post.post_id, new_post));
       post_ids_not_cached.erase(new_post.post_id);
       free(return_value);
@@ -448,31 +378,7 @@ void PostStorageHandler::ReadPosts(
       Post new_post;
       char *post_json_char = bson_as_json(doc, nullptr);
       json post_json = json::parse(post_json_char);
-      new_post.req_id = post_json["req_id"];
-      new_post.timestamp = post_json["timestamp"];
-      new_post.post_id = post_json["post_id"];
-      new_post.creator.user_id = post_json["creator"]["user_id"];
-      new_post.creator.username = post_json["creator"]["username"];
-      new_post.post_type = post_json["post_type"];
-      new_post.text = post_json["text"];
-      for (auto &item : post_json["media"]) {
-        Media media;
-        media.media_id = item["media_id"];
-        media.media_type = item["media_type"];
-        new_post.media.emplace_back(media);
-      }
-      for (auto &item : post_json["user_mentions"]) {
-        UserMention user_mention;
-        user_mention.username = item["username"];
-        user_mention.user_id = item["user_id"];
-        new_post.user_mentions.emplace_back(user_mention);
-      }
-      for (auto &item : post_json["urls"]) {
-        Url url;
-        url.shortened_url = item["shortened_url"];
-        url.expanded_url = item["expanded_url"];
-        new_post.urls.emplace_back(url);
-      }
+      json_utils::JsonToPost(post_json, new_post);
       post_json_map.insert({new_post.post_id, std::string(post_json_char)});
       return_map.insert({new_post.post_id, new_post});
       bson_free(post_json_char);
