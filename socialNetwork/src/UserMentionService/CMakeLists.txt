@@ -23,6 +23,7 @@ target_link_libraries(
     Boost::log
     Boost::log_setup
     jaegertracing
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS UserMentionService DESTINATION ./)
