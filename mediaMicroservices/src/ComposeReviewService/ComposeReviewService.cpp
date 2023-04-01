@@ -63,7 +63,6 @@ int main(int argc, char *argv[]) {
   TThreadedServer server(
       std::make_shared<ComposeReviewServiceProcessor>(
           std::make_shared<ComposeReviewHandler>(
-              memcached_client_pool,
               &compose_client_pool,
               &user_client_pool,
               &movie_client_pool)),

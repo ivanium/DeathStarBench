@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
   TThreadedServer server(
       std::make_shared<MovieIdServiceProcessor>(
       std::make_shared<MovieIdHandler>(
-              memcached_client_pool, mongodb_client_pool,
+              mongodb_client_pool,
               &compose_client_pool, &rating_client_pool)),
       std::make_shared<TServerSocket>("0.0.0.0", port),
       std::make_shared<TFramedTransportFactory>(),

@@ -25,6 +25,12 @@
 #include "../../third_party/PicoSHA2/picosha2.h"
 #include "../logger.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
 // Custom Epoch (January 1, 2018 Midnight GMT = 2018-01-01T00:00:00Z)
 #define CUSTOM_EPOCH 1514764800000
 
@@ -74,7 +80,7 @@ class UserHandler : public UserServiceIf {
       std::mutex*,
       const std::string &,
       const std::string &,
-      memcached_pool_st *,
+      // memcached_pool_st *,
       mongoc_client_pool_t *,
       ClientPool<ThriftClient<ComposeReviewServiceClient>> *);
   ~UserHandler() override = default;
@@ -107,7 +113,8 @@ class UserHandler : public UserServiceIf {
   std::string _machine_id;
   std::string _secret;
   std::mutex *_thread_lock;
-  memcached_pool_st *_memcached_client_pool;
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _user_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<ComposeReviewServiceClient>> *_compose_client_pool;
 
@@ -117,13 +124,23 @@ UserHandler::UserHandler(
     std::mutex *thread_lock,
     const std::string &machine_id,
     const std::string &secret,
-    memcached_pool_st *memcached_client_pool,
+    // memcached_pool_st *memcached_client_pool,
     mongoc_client_pool_t *mongodb_client_pool,
     ClientPool<ThriftClient<ComposeReviewServiceClient>> *compose_client_pool
     ) {
   _thread_lock = thread_lock;
   _machine_id = machine_id;
-  _memcached_client_pool = memcached_client_pool;
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("users") ||
+      (_pool = cmanager->get_pool("users")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _user_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+
   _mongodb_client_pool = mongodb_client_pool;
   _compose_client_pool = compose_client_pool;
   _secret = secret;
@@ -372,38 +389,17 @@ void UserHandler::UploadUserWithUsername(
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
   size_t user_id_size;
-  uint32_t memcached_flags;
-
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
 
   auto id_get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetUserId", { opentracing::ChildOf(&span->context()) });
-  char *user_id_mmc = memcached_get(
-      memcached_client,
-      (username+":user_id").c_str(),
-      (username+":user_id").length(),
-      &user_id_size,
-      &memcached_flags,
-      &memcached_rc);
+  char *user_id_mmc = reinterpret_cast<char *>( _user_cache->get((username+":user_id").c_str(), (username+":user_id").length(), &user_id_size));
   id_get_span->Finish();
-  if (!user_id_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
-  memcached_pool_push(_memcached_client_pool, memcached_client);
 
   int64_t user_id = 0;
+
+  
+  uint64_t missed_cycles_stt = 0;
+  uint64_t missed_cycles_end = 0;
 
   if (user_id_mmc) {
     LOG(debug) << "Found password, salt and ID are cached in Memcached";
@@ -412,7 +408,8 @@ void UserHandler::UploadUserWithUsername(
 
   // If not cached in memcached
   else {
-    LOG(debug) << "User_id not cached in Memcached";
+    missed_cycles_stt = midas::Time::get_cycles_stt();
+    LOG(debug) << "User_id not cached in Midas";
     mongoc_client_t *mongodb_client = mongoc_client_pool_pop(
         _mongodb_client_pool);
     if (!mongodb_client) {
@@ -487,6 +484,9 @@ void UserHandler::UploadUserWithUsername(
     mongoc_cursor_destroy(cursor);
     mongoc_collection_destroy(collection);
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
+
+    
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
   }
 
   if (user_id) {
@@ -508,38 +508,26 @@ void UserHandler::UploadUserWithUsername(
     _compose_client_pool->Push(compose_client_wrapper);
   }
 
-  memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    free(user_id_mmc);
-    throw se;
-  }
 
   if (user_id && !user_id_mmc) {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     auto id_set_span = opentracing::Tracer::Global()->StartSpan(
         "MmcSetUserId", { opentracing::ChildOf(&span->context()) });
     std::string user_id_str = std::to_string(user_id);
-    memcached_rc = memcached_set(
-        memcached_client,
-        (username+":user_id").c_str(),
-        (username+":user_id").length(),
-        user_id_str.c_str(),
-        user_id_str.length(),
-        static_cast<time_t>(0),
-        static_cast<uint32_t>(0)
-    );
+    bool set_success = _user_cache->set((username+":user_id").c_str(), (username+":user_id").length(), user_id_str.c_str(),
+                           user_id_str.length());
     id_set_span->Finish();
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if (!set_success) {
       LOG(warning)
         << "Failed to set the user_id of user "
-        << username << " to Memcached: "
-        << memcached_strerror(memcached_client, memcached_rc);
+        << username << " to Memcached";
     }
+
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    _pool->record_miss_penalty(missed_cycles_end,
+                                user_id_str.length());
+    
   }
-  memcached_pool_push(_memcached_client_pool, memcached_client);
 
   free(user_id_mmc);
   span->Finish();
@@ -600,80 +588,42 @@ void UserHandler::Login(
   size_t password_size;
   size_t salt_size;
   size_t user_id_size;
-  uint32_t memcached_flags;
-
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
 
   auto pswd_get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetPassword", { opentracing::ChildOf(&span->context()) });
-  char *password_mmc = memcached_get(
-      memcached_client,
+  char *password_mmc = reinterpret_cast<char *>(_user_cache->get(
       (username+":password").c_str(),
       (username+":password").length(),
-      &password_size,
-      &memcached_flags,
-      &memcached_rc);
+      &password_size));
   pswd_get_span->Finish();
-  if (!password_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
 
   auto salt_get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetSalt", { opentracing::ChildOf(&span->context()) });
-  char *salt_mmc = memcached_get(
-      memcached_client,
+  char *salt_mmc = reinterpret_cast<char *>(_user_cache->get(
       (username+":salt").c_str(),
       (username+":salt").length(),
-      &salt_size,
-      &memcached_flags,
-      &memcached_rc);
+      &salt_size));
   salt_get_span->Finish();
-  if (!salt_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    free(password_mmc);
-    throw se;
-  }
 
   auto id_get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetUserId", { opentracing::ChildOf(&span->context()) });
-  char *user_id_mmc = memcached_get(
-      memcached_client,
+  char *user_id_mmc = reinterpret_cast<char *>(_user_cache->get(
       (username+":user_id").c_str(),
       (username+":user_id").length(),
-      &user_id_size,
-      &memcached_flags,
-      &memcached_rc);
+      &user_id_size));
   id_get_span->Finish();
-  if (!user_id_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    free(salt_mmc);
-    free(password_mmc);
-    throw se;
-  }
 
-  memcached_pool_push(_memcached_client_pool, memcached_client);
 
   int64_t user_id = 0;
   const char *salt_str = nullptr;
   const char *password_str = nullptr;
+
+
+  
+  uint64_t missed_cycles_stt = 0;
+  uint64_t missed_cycles_end = 0;
+  bool record_miss_cycles = false;
+  size_t missed_bytes = 0;
 
   if (password_mmc && salt_mmc && user_id_mmc) {
     LOG(debug) << "Found password, salt and ID are cached in Memcached";
@@ -684,7 +634,10 @@ void UserHandler::Login(
 
     // If not cached in memcached
   else {
-    LOG(debug) << "Password or salt or ID not cached in Memcached";
+    record_miss_cycles = true;
+    missed_cycles_stt = midas::Time::get_cycles_stt();
+
+    LOG(debug) << "Password or salt or ID not cached in Midas";
     mongoc_client_t *mongodb_client = mongoc_client_pool_pop(
         _mongodb_client_pool);
     if (!mongodb_client) {
@@ -816,6 +769,8 @@ void UserHandler::Login(
     mongoc_cursor_destroy(cursor);
     mongoc_collection_destroy(collection);
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
+    
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
   }
 
   if (user_id && salt_str && password_str) {
@@ -847,85 +802,72 @@ void UserHandler::Login(
       free(user_id_mmc);
       throw se;
     }
-  }
-
-  memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    free(salt_mmc);
-    free(password_mmc);
-    free(user_id_mmc);
-    throw se;
+    
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
   }
 
   if (salt_str && !salt_mmc) {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     auto salt_set_span = opentracing::Tracer::Global()->StartSpan(
         "MmcSetSalt", { opentracing::ChildOf(&span->context()) });
-    memcached_rc = memcached_set(
-        memcached_client,
+    bool set_success = _user_cache->set(
         (username+":salt").c_str(),
         (username+":salt").length(),
         salt_str,
-        std::strlen(salt_str),
-        0,
-        0
-    );
-    salt_set_span->Finish();
+        std::strlen(salt_str));
 
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    salt_set_span->Finish();
+    if (!set_success) {
       LOG(warning)
         << "Failed to set the salt of user "
-        << username << " to Memcached: "
-        << memcached_strerror(memcached_client, memcached_rc);
+        << username << " to Midas";
     }
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    missed_bytes += std::strlen(salt_str);
   }
 
   if (password_str && !password_mmc) {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     auto pswd_set_span = opentracing::Tracer::Global()->StartSpan(
         "MmcSetPassword", { opentracing::ChildOf(&span->context()) });
-    memcached_rc = memcached_set(
-        memcached_client,
+    bool set_success = _user_cache->set(
         (username+":password").c_str(),
         (username+":password").length(),
         password_str,
-        std::strlen(password_str),
-        static_cast<time_t>(0),
-        static_cast<uint32_t>(0)
-    );
+        std::strlen(password_str));
     pswd_set_span->Finish();
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if (!set_success) {
       LOG(warning)
         << "Failed to set the password of user "
-        << username << " to Memcached: "
-        << memcached_strerror(memcached_client, memcached_rc);
+        << username << " to Midas";
     }
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    missed_bytes += std::strlen(password_str);
   }
 
   if (user_id && !user_id_mmc) {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     auto id_set_span = opentracing::Tracer::Global()->StartSpan(
         "MmcSetUserId", { opentracing::ChildOf(&span->context()) });
     std::string user_id_str = std::to_string(user_id);
-    memcached_rc = memcached_set(
-        memcached_client,
+    bool set_success = _user_cache->set(
         (username+":user_id").c_str(),
         (username+":user_id").length(),
         user_id_str.c_str(),
-        user_id_str.length(),
-        static_cast<time_t>(0),
-        static_cast<uint32_t>(0)
-    );
+        user_id_str.length());
     id_set_span->Finish();
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if (!set_success) {
       LOG(warning)
         << "Failed to set the user_id of user "
-        << username << " to Memcached: "
-        << memcached_strerror(memcached_client, memcached_rc);
+        << username << " to Midas";
     }
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    missed_bytes += user_id_str.length();
   }
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+
+  if(record_miss_cycles) {
+    _pool->record_miss_penalty(missed_cycles_end, missed_bytes);
+  }
 
   free(salt_mmc);
   free(password_mmc);

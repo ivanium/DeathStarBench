@@ -27,6 +27,7 @@ target_link_libraries(
     Boost::log_setup
     jaegertracing
     OpenSSL::SSL
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS UserService DESTINATION ./)

@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
   TThreadedServer server(
       std::make_shared<PlotServiceProcessor>(
       std::make_shared<PlotHandler>(
-              memcached_client_pool, mongodb_client_pool)),
+              mongodb_client_pool)),
       std::make_shared<TServerSocket>("0.0.0.0", port),
       std::make_shared<TFramedTransportFactory>(),
       std::make_shared<TBinaryProtocolFactory>()

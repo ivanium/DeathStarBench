@@ -28,7 +28,8 @@ struct ErrorCode {
     SE_MEMCACHED_ERROR = 3,
     SE_MONGODB_ERROR = 4,
     SE_REDIS_ERROR = 5,
-    SE_THRIFT_HANDLER_ERROR = 6
+    SE_THRIFT_HANDLER_ERROR = 6,
+    SE_MIDAS_ERROR = 7
   };
 };
 

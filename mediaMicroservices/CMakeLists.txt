@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 project(media_microservices)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -W -Wall -Wextra -O2")
 SET(CMAKE_INSTALL_PREFIX /usr/local/bin)

@@ -14,13 +14,18 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
 namespace media_service {
 using json = nlohmann::json;
 
 class MovieInfoHandler : public MovieInfoServiceIf {
  public:
   MovieInfoHandler(
-      memcached_pool_st *,
       mongoc_client_pool_t *);
   ~MovieInfoHandler() override = default;
   void ReadMovieInfo(MovieInfo& _return, int64_t req_id,
@@ -38,15 +43,24 @@ class MovieInfoHandler : public MovieInfoServiceIf {
       const std::map<std::string, std::string> & carrier) override;
 
 
- private:
-  memcached_pool_st *_memcached_client_pool;
+ private: 
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _movieinfo_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
 };
 
 MovieInfoHandler::MovieInfoHandler(
-    memcached_pool_st *memcached_client_pool,
     mongoc_client_pool_t *mongodb_client_pool) {
-  _memcached_client_pool = memcached_client_pool;
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("movieinfos") ||
+      (_pool = cmanager->get_pool("movieinfos")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _movieinfo_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _mongodb_client_pool = mongodb_client_pool;
 }
 
@@ -183,40 +197,20 @@ void MovieInfoHandler::ReadMovieInfo(
       "ReadMovieInfo",
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
-  
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
 
   size_t movie_info_mmc_size;
-  uint32_t memcached_flags;
   auto get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetMovieInfo", { opentracing::ChildOf(&span->context()) });
-  char *movie_info_mmc = memcached_get(
-      memcached_client,
+  char *movie_info_mmc = reinterpret_cast<char *>(_movieinfo_cache->get(
       movie_id.c_str(),
       movie_id.length(),
-      &movie_info_mmc_size,
-      &memcached_flags,
-      &memcached_rc);
-  if (!movie_info_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+      &movie_info_mmc_size));
   get_span->Finish();
 
+  uint64_t missed_cycles_stt = 0;
+  uint64_t missed_cycles_end = 0;
   if (movie_info_mmc) {
-    LOG(debug) << "Get movie-info " << movie_id << " cache hit from Memcached";
+    LOG(debug) << "Get movie-info " << movie_id << " cache hit from Midas";
     json movie_info_json = json::parse(std::string(
         movie_info_mmc, movie_info_mmc + movie_info_mmc_size));
     _return.movie_id = movie_info_json["movie_id"];
@@ -242,6 +236,7 @@ void MovieInfoHandler::ReadMovieInfo(
     }
     free(movie_info_mmc);
   } else {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     // If not cached in memcached
     mongoc_client_t *mongodb_client = mongoc_client_pool_pop(
         _mongodb_client_pool);
@@ -324,32 +319,21 @@ void MovieInfoHandler::ReadMovieInfo(
       mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
       // upload movie-info to memcached
-      memcached_client = memcached_pool_pop(
-          _memcached_client_pool, true, &memcached_rc);
-      if (!memcached_client) {
-        ServiceException se;
-        se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-        se.message = "Failed to pop a client from memcached pool";
-        throw se;
-      }
       auto set_span = opentracing::Tracer::Global()->StartSpan(
           "MmcSetMovieInfo", { opentracing::ChildOf(&span->context()) });
 
-      memcached_rc = memcached_set(
-          memcached_client,
+      bool set_success = _movieinfo_cache->set(
           movie_id.c_str(),
           movie_id.length(),
           movie_info_json_char,
-          std::strlen(movie_info_json_char),
-          static_cast<time_t>(0),
-          static_cast<uint32_t>(0));
-      if (memcached_rc != MEMCACHED_SUCCESS) {
-        LOG(warning) << "Failed to set movie_info to Memcached: "
-                     << memcached_strerror(memcached_client, memcached_rc);
+          std::strlen(movie_info_json_char));
+      if (!set_success) {
+        LOG(warning) << "Failed to set movie_info to Midas";
       }
       set_span->Finish();
+      missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+      _pool->record_miss_penalty(missed_cycles_end, std::strlen(movie_info_json_char));
       bson_free(movie_info_json_char);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
     }
   }
   span->Finish();
@@ -449,17 +433,11 @@ void MovieInfoHandler::UpdateRating(
 
   auto delete_span = opentracing::Tracer::Global()->StartSpan(
       "MmcDelete", {opentracing::ChildOf(&span->context())});
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
+  bool deleted = _movieinfo_cache->remove(movie_id.c_str(), movie_id.length());
+  if (!deleted) {
+    LOG(warning) << "Failed to delete movie_info from Midas";
   }
-  memcached_delete(memcached_client, movie_id.c_str(), movie_id.length(), 0);
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+  
   delete_span->Finish();
 
   span->Finish();

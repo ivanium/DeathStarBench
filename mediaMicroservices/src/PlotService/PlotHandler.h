@@ -13,12 +13,17 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
 namespace media_service {
 
 class PlotHandler : public PlotServiceIf {
  public:
   PlotHandler(
-      memcached_pool_st *,
       mongoc_client_pool_t *);
   ~PlotHandler() override = default;
 
@@ -28,14 +33,24 @@ class PlotHandler : public PlotServiceIf {
       const std::map<std::string, std::string> & carrier) override;
 
  private:
-  memcached_pool_st *_memcached_client_pool;
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _plot_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
 };
 
 PlotHandler::PlotHandler(
-    memcached_pool_st *memcached_client_pool,
     mongoc_client_pool_t *mongodb_client_pool) {
-  _memcached_client_pool = memcached_client_pool;
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("plots") ||
+      (_pool = cmanager->get_pool("plots")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _plot_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+
   _mongodb_client_pool = mongodb_client_pool;
 }
 
@@ -55,40 +70,22 @@ void PlotHandler::ReadPlot(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
-
   size_t plot_size;
-  uint32_t memcached_flags;
+  
 
   // Look for the movie id from memcached
   auto get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetPlot", { opentracing::ChildOf(&span->context()) });
   auto plot_id_str = std::to_string(plot_id);
 
-  char* plot_mmc = memcached_get(
-      memcached_client,
+  char* plot_mmc = reinterpret_cast<char *>( _plot_cache->get(
       plot_id_str.c_str(),
       plot_id_str.length(),
-      &plot_size,
-      &memcached_flags,
-      &memcached_rc);
-  if (!plot_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
+      &plot_size));
   get_span->Finish();
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+  uint64_t missed_cycles_stt = 0;
+  uint64_t missed_cycles_end = 0;
+
 
   // If cached in memcached
   if (plot_mmc) {
@@ -97,6 +94,7 @@ void PlotHandler::ReadPlot(
     _return = std::string(plot_mmc);
     free(plot_mmc);
   } else {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     // If not cached in memcached
     mongoc_client_t *mongodb_client = mongoc_client_pool_pop(
         _mongodb_client_pool);
@@ -140,28 +138,21 @@ void PlotHandler::ReadPlot(
         mongoc_cursor_destroy(cursor);
         mongoc_collection_destroy(collection);
         mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
-        memcached_client = memcached_pool_pop(
-            _memcached_client_pool, true, &memcached_rc);
 
         // Upload the plot to memcached
         auto set_span = opentracing::Tracer::Global()->StartSpan(
             "MmcSetPlot", { opentracing::ChildOf(&span->context()) });
-        memcached_rc = memcached_set(
-            memcached_client,
+        bool set_success = _plot_cache->set(
             plot_id_str.c_str(),
             plot_id_str.length(),
             _return.c_str(),
-            _return.length(),
-            static_cast<time_t>(0),
-            static_cast<uint32_t>(0)
+            _return.length()
         );
         set_span->Finish();
 
-        if (memcached_rc != MEMCACHED_SUCCESS) {
-          LOG(warning) << "Failed to set plot to Memcached: "
-              << memcached_strerror(memcached_client, memcached_rc);
+        if (!set_success) {
+          LOG(warning) << "Failed to set plot to Midas";
         }
-        memcached_pool_push(_memcached_client_pool, memcached_client);
       } else {
         LOG(error) << "Attribute plot is not find in MongoDB";
         bson_destroy(query);
@@ -186,6 +177,8 @@ void PlotHandler::ReadPlot(
       free(plot_mmc);
       throw se;
     }
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    _pool->record_miss_penalty(missed_cycles_end, _return.length());
   }
   span->Finish();
 }

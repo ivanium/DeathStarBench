@@ -19,6 +19,13 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "resource_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static int kNumBuckets = 1 << 20;
+
 namespace media_service {
 #define NUM_COMPONENTS 5
 #define MMC_EXP_TIME 10
@@ -30,7 +37,7 @@ using std::chrono::system_clock;
 class ComposeReviewHandler : public ComposeReviewServiceIf {
  public:
   ComposeReviewHandler(
-      memcached_pool_st *,
+      // memcached_pool_st *,
       ClientPool<ThriftClient<ReviewStorageServiceClient>> *,
       ClientPool<ThriftClient<UserReviewServiceClient>> *,
       ClientPool<ThriftClient<MovieReviewServiceClient>> *);
@@ -49,7 +56,8 @@ class ComposeReviewHandler : public ComposeReviewServiceIf {
 
 
  private:
-  memcached_pool_st *_memcached_client_pool;
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _review_cache;
   ClientPool<ThriftClient<ReviewStorageServiceClient>>
       *_review_storage_client_pool;
   ClientPool<ThriftClient<UserReviewServiceClient>>
@@ -60,14 +68,24 @@ class ComposeReviewHandler : public ComposeReviewServiceIf {
 };
 
 ComposeReviewHandler::ComposeReviewHandler(
-    memcached_pool_st *memcached_client_pool,
+    // memcached_pool_st *memcached_client_pool,
     ClientPool<ThriftClient<ReviewStorageServiceClient>> 
         *review_storage_client_pool,
     ClientPool<ThriftClient<UserReviewServiceClient>>
         *user_review_client_pool,
     ClientPool<ThriftClient<MovieReviewServiceClient>>
         *movie_review_client_pool ) {
-  _memcached_client_pool = memcached_client_pool;
+  auto _cmanager = midas::CacheManager::global_cache_manager();
+  if (!_cmanager->create_pool("reviews") ||
+      (_pool = _cmanager->get_pool("reviews")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool!";
+    throw se;
+  };
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _review_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+
   _review_storage_client_pool = review_storage_client_pool;
   _user_review_client_pool = user_review_client_pool;
   _movie_review_client_pool = movie_review_client_pool;
@@ -99,81 +117,37 @@ void ComposeReviewHandler::_ComposeAndUpload(
   };
 
   // Compose a review from the components obtained from memcached
-  memcached_return_t rc;
-  auto client = memcached_pool_pop(_memcached_client_pool, true, &rc);
-  if (!client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
 
   Review new_review;
-  rc = memcached_mget(client, keys, key_sizes, NUM_COMPONENTS);
-  if (rc != MEMCACHED_SUCCESS) {
-    LOG(error) << "Cannot get components of request " << req_id << ": "
-        << memcached_strerror(client, rc);
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(client, rc);
-    memcached_pool_push(_memcached_client_pool, client);
-    throw se;
-  }
 
-  char return_key[MEMCACHED_MAX_KEY];
-  size_t return_key_length;
-  char *return_value;
-  size_t return_value_length;
-  uint32_t flags;
+  for (int i = 0; i < NUM_COMPONENTS; i++) {
+    size_t return_value_length = 0;
+    char* return_value = reinterpret_cast<char *>(_review_cache->get(keys[i], key_sizes[i], &return_value_length));
 
-  while (true) {
-    return_value = memcached_fetch(client, return_key, &return_key_length,
-        &return_value_length, &flags, &rc);
-    if (return_value == nullptr) {
-       LOG(debug) << "Memcached mget finished "
-          << memcached_strerror(client, rc);
-      break;
-    }
-    if (rc != MEMCACHED_SUCCESS) {
-      free(return_value);
-      memcached_quit(client);
-      memcached_pool_push(_memcached_client_pool, client);
+    if (!return_value) {
       LOG(error) << "Cannot get components of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       se.message =  "Cannot get components of request " + std::to_string(req_id);
       throw se;
     }
-    std::string key_str(return_key, return_key + return_key_length);
+
     std::string value_str(return_value, return_value + return_value_length);
-    if (key_str == key_unique_id) {
+
+    if (i == 0) {
       new_review.review_id = std::stoul(value_str);
-    } else if (key_str == key_movie_id) {
+    } else if (i == 1) {
       new_review.movie_id = value_str;
-    } else if (key_str == key_text) {
+    } else if (i == 2) {
       new_review.text = value_str;
-    } else if (key_str == key_user_id) {
+    } else if (i == 3) {
       new_review.user_id = std::stoul(value_str);
-    } else if (key_str == key_rating) {
+    } else if (i == 4) {
       new_review.rating = std::stoi(value_str);
-    } else {
-      LOG(error) << "Unexpected memcached fetched data of request " << req_id
-                   << " key: " << key_str
-                   << " value: " << value_str;
-      ServiceException se;
-      se.errorCode = ErrorCode::SE_THRIFT_HANDLER_ERROR;
-      se.message = "Unexpected memcached fetched data of request " +
-          std::to_string(req_id);
-      free(return_value);
-      memcached_quit(client);
-      memcached_pool_push(_memcached_client_pool, client);
-      throw se;
     }
     free(return_value);
   }
 
-  memcached_quit(client);
-  memcached_pool_push(_memcached_client_pool, client);
 
   new_review.timestamp = duration_cast<milliseconds>(
       system_clock::now().time_since_epoch()).count();
@@ -266,90 +240,56 @@ void ComposeReviewHandler::UploadMovieId(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
   std::string key_counter = std::to_string(req_id) + ":counter";
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
 
   // Initialize the counter to 0 if there it is not in the memcached
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_counter.c_str(),
-      key_counter.size(),
-      "0", 1, MMC_EXP_TIME, 0);
-
-  // error if it cannot be stored
-  if (memcached_rc != MEMCACHED_SUCCESS &&
-      memcached_rc != MEMCACHED_DATA_EXISTS) {
-    LOG(error) << "Failed to initilize the counter for request " << req_id
-        << " Error code: "
-        << memcached_strerror(memcached_client, memcached_rc);
+  int tmp_counter = 0;
+  if (!_review_cache->add(key_counter.c_str(), key_counter.size(), &tmp_counter, sizeof(int))) {
+    LOG(error) << "Failed to initilize the counter for request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   }
 
   // Store movie_id to memcached
-  uint64_t counter_value;
+  int counter_value;
   std::string key_movie_id = std::to_string(req_id) + ":movie_id";
-  memcached_rc = memcached_add(
-      memcached_client,
+  int status = _review_cache->add(
       key_movie_id.c_str(),
       key_movie_id.size(),
       movie_id.c_str(),
-      movie_id.size(),
-      MMC_EXP_TIME, 0);
-  if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+      movie_id.size());
+  if (status == 2) {
     // Another thread has uploaded movie_id, which is an unexpected behaviour.
     LOG(warning) << "movie_id of request " << req_id
                  << " has already been stored";
     size_t value_size;
-    char *counter_value_str = memcached_get(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        &value_size,
-        nullptr,
-        &memcached_rc);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    int* counter_value_ptr = reinterpret_cast<int *>(_review_cache->get(key_counter.c_str(), key_counter.size(), &value_size));
+    if (!counter_value_ptr) {
       LOG(error) << "Cannot get the counter of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
-    counter_value = std::stoul(counter_value_str);
-    free(counter_value_str);
-  } else if (memcached_rc != MEMCACHED_SUCCESS) {
+    counter_value = *counter_value_ptr;
+    free(counter_value_ptr);
+  } else if (status == 0) {
     LOG(error) << "Cannot store movie_id of request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   } else {
     // Atomically increment and get the counter value
-    memcached_increment(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        1, &counter_value);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if(!_review_cache->inc(key_counter.c_str(), key_counter.size(), (int)1, &counter_value)) {
       LOG(error) << "Cannot increment and get the counter of request "
           << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
   }
   LOG(debug) << "req_id " << req_id
-      << " caching movie_id to Memcached finished";
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+      << " caching movie_id to Midas finished";
 
   // If this thread is the last one uploading the review components,
   // it is in charge of compose the request and upload to the microservices in
@@ -363,6 +303,8 @@ void ComposeReviewHandler::UploadMovieId(
 void ComposeReviewHandler::UploadUserId(
     int64_t req_id, int64_t user_id,
     const std::map<std::string, std::string> & carrier) {
+  LOG(warning) << "Started upload user id request " << req_id
+                <<  "for user " << user_id;
 
   // Initialize a span
   TextMapReader reader(carrier);
@@ -374,92 +316,52 @@ void ComposeReviewHandler::UploadUserId(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
   std::string key_counter = std::to_string(req_id) + ":counter";
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-
-  // Initialize the counter to 0 if there it is not in the memcached
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_counter.c_str(),
-      key_counter.size(),
-      "0", 1, MMC_EXP_TIME, 0);
-
-  // error if it cannot be stored
-  if (memcached_rc != MEMCACHED_SUCCESS &&
-      memcached_rc != MEMCACHED_DATA_EXISTS) {
-    LOG(error) << "Failed to initilize the counter for request " << req_id
-        << " Error code: "
-        << memcached_strerror(memcached_client, memcached_rc);
+  int tmp_counter = 0;
+  if (!_review_cache->add(key_counter.c_str(), key_counter.size(), &tmp_counter, sizeof(int))) {
+    LOG(error) << "Failed to initilize the counter for request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   }
 
   // Store user_id to memcached
-  uint64_t counter_value;
+  int counter_value;
   std::string key_user_id = std::to_string(req_id) + ":user_id";
   std::string user_id_str = std::to_string(user_id);
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_user_id.c_str(),
-      key_user_id.size(),
-      user_id_str.c_str(),
-      user_id_str.size(),
-      MMC_EXP_TIME, 0);
-  if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+  int status = _review_cache->add(key_user_id.c_str(), key_user_id.size(), user_id_str.c_str(), user_id_str.size());
+  if (status == 2) {
+    // UserId Exists
     // Another thread has uploaded user_id, which is an unexpected behaviour.
     LOG(warning) << "user_id of request " << req_id
                  << " has already been stored";
     size_t value_size;
-    char *counter_value_str = memcached_get(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        &value_size,
-        0,
-        &memcached_rc);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    int* counter_value_ptr = reinterpret_cast<int *>(_review_cache->get(key_counter.c_str(), key_counter.size(), &value_size));
+
+    if (!counter_value_ptr) {
       LOG(error) << "Cannot get the counter of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
-    counter_value = std::stoul(counter_value_str);
-    free(counter_value_str);
-  } else if (memcached_rc != MEMCACHED_SUCCESS) {
-    LOG(error) << "Cannot store user_id of request " << req_id
-               << " Error code: "
-               << memcached_strerror(memcached_client, memcached_rc);
+    counter_value = *counter_value_ptr;
+    free(counter_value_ptr);
+  } else if (status == 0) {
+    LOG(error) << "Cannot store user_id of request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   } else {
     // Atomically increment and get the counter value
-    memcached_increment(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        1, &counter_value);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if(!_review_cache->inc(key_counter.c_str(), key_counter.size(), (int)1, &counter_value)) {
       LOG(error) << "Cannot increment and get the counter of request "
                  << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
   }
-  LOG(debug) << "req_id " << req_id << "caching user to Memcached finished";
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+  LOG(debug) << "req_id " << req_id << "caching user to Midas finished";
 
   // If this thread is the last one uploading the review components,
   // it is in charge of compose the request and upload to the microservices in
@@ -484,93 +386,52 @@ void ComposeReviewHandler::UploadUniqueId(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
   std::string key_counter = std::to_string(req_id) + ":counter";
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
 
   // Initialize the counter to 0 if there it is not in the memcached
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_counter.c_str(),
-      key_counter.size(),
-      "0", 1, MMC_EXP_TIME, 0);
-
-  // error if it cannot be stored
-  if (memcached_rc != MEMCACHED_SUCCESS &&
-      memcached_rc != MEMCACHED_DATA_EXISTS) {
-    LOG(error) << "Failed to initilize the counter for request " << req_id
-               << " Error code: "
-               << memcached_strerror(memcached_client, memcached_rc);
+  int tmp_counter = 0;
+  if (!_review_cache->add(key_counter.c_str(), key_counter.size(), &tmp_counter, sizeof(int))) {
+    LOG(error) << "Failed to initilize the counter for request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   }
 
   // Store review_id to memcached
-  uint64_t counter_value;
+  int counter_value;
   std::string key_unique_id = std::to_string(req_id) + ":review_id";
   std::string unique_id_str = std::to_string(review_id);
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_unique_id.c_str(),
-      key_unique_id.size(),
-      unique_id_str.c_str(),
-      unique_id_str.size(),
-      MMC_EXP_TIME, 0);
-  if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+  int status = _review_cache->add(key_unique_id.c_str(), key_unique_id.size(),unique_id_str.c_str(), unique_id_str.size());
+  if (status == 2) {
     // Another thread has uploaded review_id, which is an unexpected behaviour.
     LOG(warning) << "review_id of request " << req_id
                  << " has already been stored";
     size_t value_size;
-    char *counter_value_str = memcached_get(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        &value_size,
-        nullptr,
-        &memcached_rc);
-
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    int* counter_value_ptr = reinterpret_cast<int *>(_review_cache->get(key_counter.c_str(), key_counter.size(), &value_size));
+    if (!counter_value_ptr) {
       LOG(error) << "Cannot get the counter of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
-    counter_value = std::stoul(counter_value_str);
-    free(counter_value_str);
-  } else if (memcached_rc != MEMCACHED_SUCCESS) {
-    LOG(error) << "Cannot store review_id of request " << req_id;
+    counter_value = *counter_value_ptr;
+    free(counter_value_ptr);
+  } else if (status == 0) {
+    LOG(error) << "Cannot store user_id of request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
   } else {
-    // Atomically increment and get the counter value
-    memcached_increment(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        1, &counter_value);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if(!_review_cache->inc(key_counter.c_str(), key_counter.size(), (int)1, &counter_value)) {
       LOG(error) << "Cannot increment and get the counter of request "
                  << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
   }
   LOG(debug) << "req_id " << req_id
-             << " caching review_id to Memcached finished";
+             << " caching review_id to Midas finished";
 
-  memcached_pool_push(_memcached_client_pool, memcached_client);
 
   // If this thread is the last one uploading the review components,
   // it is in charge of compose the request and upload to the microservices in
@@ -596,89 +457,58 @@ void ComposeReviewHandler::UploadText(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
+  // memcached_return_t memcached_rc;
   std::string key_counter = std::to_string(req_id) + ":counter";
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-
-  // Initialize the counter to 0 if there it is not in the memcached
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_counter.c_str(),
-      key_counter.size(),
-      "0", 1, MMC_EXP_TIME, 0);
-
-  // error if it cannot be stored
-  if (memcached_rc != MEMCACHED_SUCCESS &&
-      memcached_rc != MEMCACHED_DATA_EXISTS) {
-    LOG(error) << "Failed to initilize the counter for request " << req_id
-               << " Error code: "
-               << memcached_strerror(memcached_client, memcached_rc);
+  int tmp_counter = 0;
+  if (!_review_cache->add(key_counter.c_str(), key_counter.size(), &tmp_counter, sizeof(int))) {
+    LOG(error) << "Failed to initilize the counter for request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   }
 
   // Store text to memcached
-  uint64_t counter_value;
+  int counter_value;
   std::string key_text = std::to_string(req_id) + ":text";
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_text.c_str(),
-      key_text.size(),
-      text.c_str(),
-      text.size(),
-      MMC_EXP_TIME, 0);
-  if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+  // memcached_rc = memcached_add(
+  //     memcached_client,
+  //     key_text.c_str(),
+  //     key_text.size(),
+  //     text.c_str(),
+  //     text.size(),
+  //     MMC_EXP_TIME, 0);
+  // if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+  int status = _review_cache->add(key_text.c_str(), key_text.size(), text.c_str(), text.size());
+  if (status == 2) {
     // Another thread has uploaded text, which is an unexpected behaviour.
     LOG(warning) << "text of request " << req_id
                  << " has already been stored";
     size_t value_size;
-    char *counter_value_str = memcached_get(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        &value_size,
-        nullptr,
-        &memcached_rc);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    int* counter_value_ptr = reinterpret_cast<int *>(_review_cache->get(key_counter.c_str(), key_counter.size(), &value_size));
+
+    if (!counter_value_ptr) {
       LOG(error) << "Cannot get the counter of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
-    counter_value = std::stoul(counter_value_str);
-    free(counter_value_str);
-  } else if (memcached_rc != MEMCACHED_SUCCESS) {
+    counter_value = *counter_value_ptr;
+    free(counter_value_ptr);
+  } else if (status == 0) {
     LOG(error) << "Cannot store text of request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   } else {
-    // Atomically increment and get the counter value
-    memcached_increment(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        1, &counter_value);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if(!_review_cache->inc(key_counter.c_str(), key_counter.size(), (int)1, &counter_value)) {
       LOG(error) << "Cannot increment and get the counter of request "
                  << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
   }
-  LOG(debug) << "req_id " << req_id << "caching text to Memcached finished";
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+  LOG(debug) << "req_id " << req_id << "caching text to Midas finished";
 
   // If this thread is the last one uploading the review components,
   // it is in charge of compose the request and upload to the microservices in
@@ -702,89 +532,57 @@ void ComposeReviewHandler::UploadRating(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
   std::string key_counter = std::to_string(req_id) + ":counter";
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
 
   // Initialize the counter to 0 if there it is not in the memcached
-  memcached_rc = memcached_add(
-      memcached_client,
-      key_counter.c_str(),
-      key_counter.size(),
-      "0", 1, MMC_EXP_TIME, 0);
-
-  // error if it cannot be stored
-  if (memcached_rc != MEMCACHED_SUCCESS &&
-      memcached_rc != MEMCACHED_DATA_EXISTS) {
-    LOG(error) << "Failed to initilize the counter for request " << req_id
-               << " Error code: " << memcached_strerror(memcached_client, memcached_rc);
+  int tmp_counter = 0;
+  if (!_review_cache->add(key_counter.c_str(), key_counter.size(), &tmp_counter, sizeof(int))) {
+    LOG(error) << "Failed to initilize the counter for request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   }
 
   // Store rating to memcached
-  uint64_t counter_value;
+  int counter_value;
   std::string key_rating = std::to_string(req_id) + ":rating";
   std::string rating_str = std::to_string(rating);
-  memcached_rc = memcached_add(
-      memcached_client,
+  int status = _review_cache->add(
       key_rating.c_str(),
       key_rating.size(),
       rating_str.c_str(),
-      rating_str.size(),
-      MMC_EXP_TIME, 0);
-  if (memcached_rc == MEMCACHED_DATA_EXISTS) {
+      rating_str.size());
+  if (status == 2) {
     // Another thread has uploaded rating, which is an unexpected behaviour.
     LOG(warning) << "rating of request " << req_id
                  << " has already been stored";
     size_t value_size;
-    char *counter_value_str = memcached_get(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        &value_size,
-        0,
-        &memcached_rc);
-    counter_value = std::stoul(counter_value_str);
-    free(counter_value_str);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    int* counter_value_ptr = reinterpret_cast<int *>( _review_cache->get(key_counter.c_str(), key_counter.size(), &value_size));
+
+    if (!counter_value_ptr) {
       LOG(error) << "Cannot get the counter of request " << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
-  } else if (memcached_rc != MEMCACHED_SUCCESS) {
+    counter_value = *counter_value_ptr;
+    free(counter_value_ptr);
+  } else if (status == 0) {
     LOG(error) << "Cannot store rating of request " << req_id;
     ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     throw se;
   } else {
     // Atomically increment and get the counter value
-    memcached_increment(
-        memcached_client,
-        key_counter.c_str(),
-        key_counter.size(),
-        1, &counter_value);
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    if(!_review_cache->inc(key_counter.c_str(), key_counter.size(), (int)1, &counter_value)) {
       LOG(error) << "Cannot increment and get the counter of request "
                  << req_id;
       ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message = memcached_strerror(memcached_client, memcached_rc);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
+      se.errorCode = ErrorCode::SE_MIDAS_ERROR;
       throw se;
     }
   }
-  LOG(debug) << "req_id " << req_id << " caching rating to Memcached finished";
-  memcached_pool_push(_memcached_client_pool, memcached_client);
+  LOG(debug) << "req_id " << req_id << " caching rating to Midas finished";
 
   // If this thread is the last one uploading the review components,
   // it is in charge of compose the request and upload to the microservices in

@@ -16,12 +16,19 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
+
 namespace media_service {
 
 class CastInfoHandler : public CastInfoServiceIf {
  public:
   CastInfoHandler(
-      memcached_pool_st *,
+      // memcached_pool_st *,
       mongoc_client_pool_t *);
   ~CastInfoHandler() override = default;
 
@@ -34,14 +41,25 @@ class CastInfoHandler : public CastInfoServiceIf {
       const std::map<std::string, std::string>& carrier) override;
 
  private:
-  memcached_pool_st *_memcached_client_pool;
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _cast_info_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
 };
 
 CastInfoHandler::CastInfoHandler(
-    memcached_pool_st *memcached_client_pool,
     mongoc_client_pool_t *mongodb_client_pool) {
-  _memcached_client_pool = memcached_client_pool;
+  
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("castinfo") ||
+      (_pool = cmanager->get_pool("castinfo")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _cast_info_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+
   _mongodb_client_pool = mongodb_client_pool;
 }
 void CastInfoHandler::WriteCastInfo(
@@ -139,92 +157,36 @@ void CastInfoHandler::ReadCastInfo(
   }
 
   std::map<int64_t, CastInfo> return_map;
-  memcached_return_t memcached_rc;
-  auto memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
-  char** keys;
-  size_t *key_sizes;
-  keys = new char* [cast_info_ids.size()];
-  key_sizes = new size_t [cast_info_ids.size()];
-  int idx = 0;
   for (auto &cast_info_id : cast_info_ids) {
-    std::string key_str = std::to_string(cast_info_id);
-    keys[idx] = new char [key_str.length() + 1];
-    strcpy(keys[idx], key_str.c_str());
-    key_sizes[idx] = key_str.length();
-    idx++;
-  }
-  memcached_rc = memcached_mget(memcached_client, keys, key_sizes, cast_info_ids.size());
-  if (memcached_rc != MEMCACHED_SUCCESS) {
-    LOG(error) << "Cannot get cast_info_ids of request " << req_id << ": "
-               << memcached_strerror(memcached_client, memcached_rc);
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
-
-  char return_key[MEMCACHED_MAX_KEY];
-  size_t return_key_length;
-  char *return_value;
-  size_t return_value_length;
-  uint32_t flags;
-  auto get_span = opentracing::Tracer::Global()->StartSpan(
-      "MmcMgetCastInfo", { opentracing::ChildOf(&span->context()) });
-  while (true) {
-    return_value = memcached_fetch(memcached_client, return_key,
-        &return_key_length, &return_value_length, &flags, &memcached_rc);
-    if (return_value == nullptr) {
-      LOG(debug) << "Memcached mget finished";
-      break;
-    }
-    if (memcached_rc != MEMCACHED_SUCCESS) {
+    size_t return_value_length = 0;
+    char *return_value = reinterpret_cast<char *>(
+        _cast_info_cache->get(&cast_info_id, sizeof(cast_info_id), &return_value_length));
+    if (return_value) {
+      CastInfo new_cast_info;
+      json cast_info_json = json::parse(std::string(
+          return_value, return_value + return_value_length));
+      new_cast_info.cast_info_id = cast_info_json["cast_info_id"];
+      new_cast_info.gender = cast_info_json["gender"];
+      new_cast_info.name = cast_info_json["name"];
+      new_cast_info.intro = cast_info_json["intro"];
+      return_map.insert(std::make_pair(new_cast_info.cast_info_id, new_cast_info));
+      cast_info_ids_not_cached.erase(new_cast_info.cast_info_id);
       free(return_value);
-      memcached_quit(memcached_client);
-      memcached_pool_push(_memcached_client_pool, memcached_client);
-      LOG(error) << "Cannot get components of request " << req_id;
-      ServiceException se;
-      se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-      se.message =  "Cannot get usernames of request " + std::to_string(req_id);
-      throw se;
     }
-    CastInfo new_cast_info;
-    json cast_info_json = json::parse(std::string(
-        return_value, return_value + return_value_length));
-    new_cast_info.cast_info_id = cast_info_json["cast_info_id"];
-    new_cast_info.gender = cast_info_json["gender"];
-    new_cast_info.name = cast_info_json["name"];
-    new_cast_info.intro = cast_info_json["intro"];
-    return_map.insert(std::make_pair(new_cast_info.cast_info_id, new_cast_info));
-    cast_info_ids_not_cached.erase(new_cast_info.cast_info_id);
-    free(return_value);
   }
-  get_span->Finish();
-  memcached_quit(memcached_client);
-  memcached_pool_push(_memcached_client_pool, memcached_client);
-  for (int i = 0; i < cast_info_ids.size(); ++i) {
-    delete keys[i];
-  }
-  delete[] keys;
-  delete[] key_sizes;
 
-  std::vector<std::future<void>> set_futures;
   std::map<int64_t, std::string> cast_info_json_map;
 
   // Find the rest in MongoDB
   if (!cast_info_ids_not_cached.empty()) {
+    auto missed_cycles_stt = midas::Time::get_cycles_stt();
+
+
     bson_t *query = bson_new();
     bson_t query_child;
     bson_t query_cast_info_id_list;
     const char *key;
-    idx = 0;
+    int idx = 0;
     char buf[16];
     BSON_APPEND_DOCUMENT_BEGIN(query, "cast_info_id", &query_child);
     BSON_APPEND_ARRAY_BEGIN(&query_child, "$in", &query_cast_info_id_list);
@@ -297,42 +259,26 @@ void CastInfoHandler::ReadCastInfo(
     mongoc_collection_destroy(collection);
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
 
-    // Upload cast-info to memcached
-    set_futures.emplace_back(std::async(std::launch::async, [&]() {
-      memcached_return_t _rc;
-      auto _memcached_client = memcached_pool_pop(
-          _memcached_client_pool, true, &_rc);
-      if (!_memcached_client) {
-        LOG(error) << "Failed to pop a client from memcached pool";
-        ServiceException se;
-        se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-        se.message = "Failed to pop a client from memcached pool";
-        throw se;
-      }
-      auto set_span = opentracing::Tracer::Global()->StartSpan(
-          "MmcSetCastInfo", {opentracing::ChildOf(&span->context())});
-      for (auto & it : cast_info_json_map) {
-        std::string id_str = std::to_string(it.first);
-        _rc = memcached_set(
-            _memcached_client,
-            id_str.c_str(),
-            id_str.length(),
-            it.second.c_str(),
-            it.second.length(),
-            static_cast<time_t>(0),
-            static_cast<uint32_t>(0));
-      }
-      memcached_pool_push(_memcached_client_pool, _memcached_client);
-      set_span->Finish();
-    }));
+
+    // upload posts to midas cache
+    size_t missed_bytes = 0;
+    for (auto &it : cast_info_json_map) {
+      if (!_cast_info_cache->set(&it.first, sizeof(it.first), it.second.c_str(),
+                           it.second.length()))
+        LOG(debug) << "Failed to set post " << it.first << " to midas";
+      missed_bytes += it.second.length();
+    }
+    auto missed_cycles_end = midas::Time::get_cycles_end();
+    _pool->record_miss_penalty(missed_cycles_end - missed_cycles_stt,
+                               missed_bytes);
   }
 
   if (return_map.size() != cast_info_ids.size()) {
-    try {
-      for (auto &it : set_futures) { it.get(); }
-    } catch (...) {
-      LOG(warning) << "Failed to set cast-info to memcached";
-    }
+    // try {
+    //   for (auto &it : set_futures) { it.get(); }
+    // } catch (...) {
+    //   LOG(warning) << "Failed to set cast-info to memcached";
+    // }
     LOG(error) << "cast-info-service return set incomplete";
     ServiceException se;
     se.errorCode = ErrorCode::SE_THRIFT_HANDLER_ERROR;
@@ -344,11 +290,11 @@ void CastInfoHandler::ReadCastInfo(
     _return.emplace_back(return_map[cast_info_id]);
   }
 
-  try {
-    for (auto &it : set_futures) { it.get(); }
-  } catch (...) {
-    LOG(warning) << "Failed to set cast-info to memcached";
-  }
+  // try {
+  //   for (auto &it : set_futures) { it.get(); }
+  // } catch (...) {
+  //   LOG(warning) << "Failed to set cast-info to memcached";
+  // }
 }
 
 } // namespace media_service

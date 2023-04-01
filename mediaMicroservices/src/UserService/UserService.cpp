@@ -63,7 +63,7 @@ int main(int argc, char *argv[]) {
               &thread_lock,
               machine_id,
               secret,
-              memcached_client_pool,
+              // memcached_client_pool,
               mongodb_client_pool,
               &compose_client_pool)),
       std::make_shared<TServerSocket>("0.0.0.0", port),

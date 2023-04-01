@@ -18,13 +18,18 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
 
 namespace media_service {
 
 class MovieIdHandler : public MovieIdServiceIf {
  public:
   MovieIdHandler(
-      memcached_pool_st *,
       mongoc_client_pool_t *,
       ClientPool<ThriftClient<ComposeReviewServiceClient>> *,
       ClientPool<ThriftClient<RatingServiceClient>> *);
@@ -35,18 +40,27 @@ class MovieIdHandler : public MovieIdServiceIf {
                        const std::map<std::string, std::string> &) override;
 
  private:
-  memcached_pool_st *_memcached_client_pool;
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _movie_cache;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<ComposeReviewServiceClient>> *_compose_client_pool;
   ClientPool<ThriftClient<RatingServiceClient>> *_rating_client_pool;
 };
 
 MovieIdHandler::MovieIdHandler(
-    memcached_pool_st *memcached_client_pool,
     mongoc_client_pool_t *mongodb_client_pool,
     ClientPool<ThriftClient<ComposeReviewServiceClient>> *compose_client_pool,
     ClientPool<ThriftClient<RatingServiceClient>> *rating_client_pool) {
-  _memcached_client_pool = memcached_client_pool;
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("movies") ||
+      (_pool = cmanager->get_pool("movies")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _movie_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _mongodb_client_pool = mongodb_client_pool;
   _compose_client_pool = compose_client_pool;
   _rating_client_pool = rating_client_pool;
@@ -68,16 +82,6 @@ void MovieIdHandler::UploadMovieId(
       { opentracing::ChildOf(parent_span->get()) });
   opentracing::Tracer::Global()->Inject(span->context(), writer);
 
-  memcached_return_t memcached_rc;
-  memcached_st *memcached_client = memcached_pool_pop(
-      _memcached_client_pool, true, &memcached_rc);
-  if (!memcached_client) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = "Failed to pop a client from memcached pool";
-    throw se;
-  }
-
   size_t movie_id_size;
   uint32_t memcached_flags;
   // Look for the movie id from memcached
@@ -85,34 +89,28 @@ void MovieIdHandler::UploadMovieId(
   auto get_span = opentracing::Tracer::Global()->StartSpan(
       "MmcGetMovieId", { opentracing::ChildOf(&span->context()) });
 
-  char* movie_id_mmc = memcached_get(
-      memcached_client,
+  char *movie_id_mmc = reinterpret_cast<char *>( _movie_cache->get(
       title.c_str(),
       title.length(),
-      &movie_id_size,
-      &memcached_flags,
-      &memcached_rc);
-  if (!movie_id_mmc && memcached_rc != MEMCACHED_NOTFOUND) {
-    ServiceException se;
-    se.errorCode = ErrorCode::SE_MEMCACHED_ERROR;
-    se.message = memcached_strerror(memcached_client, memcached_rc);
-    memcached_pool_push(_memcached_client_pool, memcached_client);
-    throw se;
-  }
+      &movie_id_size));
+  
   get_span->Finish();
-  memcached_pool_push(_memcached_client_pool, memcached_client);
   std::string movie_id_str;
+
+  uint64_t missed_cycles_stt = 0;
+  uint64_t missed_cycles_end = 0;
 
   // If cached in memcached
   if (movie_id_mmc) {
     LOG(debug) << "Get movie_id " << movie_id_mmc
-        << " cache hit from Memcached";
+        << " cache hit from Midas";
     movie_id_str = std::string(movie_id_mmc);
     free(movie_id_mmc);
   }
 
     // If not cached in memcached
   else {
+    missed_cycles_stt = midas::Time::get_cycles_stt();
     mongoc_client_t *mongodb_client = mongoc_client_pool_pop(
         _mongodb_client_pool);
     if (!mongodb_client) {
@@ -178,32 +176,24 @@ void MovieIdHandler::UploadMovieId(
     mongoc_cursor_destroy(cursor);
     mongoc_collection_destroy(collection);
     mongoc_client_pool_push(_mongodb_client_pool, mongodb_client);
+
+    missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
+    _pool->record_miss_penalty(missed_cycles_end, movie_id_str.length());
+
   }
   
   std::future<void> set_future;
   std::future<void> movie_id_future;
   std::future<void> rating_future;
   set_future = std::async(std::launch::async, [&]() {
-    memcached_client = memcached_pool_pop(
-        _memcached_client_pool, true, &memcached_rc);
     auto set_span = opentracing::Tracer::Global()->StartSpan(
         "MmcSetMovieId", { opentracing::ChildOf(&span->context()) });
     // Upload the movie id to memcached
-    memcached_rc = memcached_set(
-        memcached_client,
-        title.c_str(),
-        title.length(),
-        movie_id_str.c_str(),
-        movie_id_str.length(),
-        static_cast<time_t>(0),
-        static_cast<uint32_t>(0)
-    );
+    bool set_success = _movie_cache->set(title.c_str(), title.length(), movie_id_str.c_str(), movie_id_str.length());
     set_span->Finish();
-    if (memcached_rc != MEMCACHED_SUCCESS) {
-      LOG(warning) << "Failed to set movie_id to Memcached: "
-                   << memcached_strerror(memcached_client, memcached_rc);
+    if (!set_success) {
+      LOG(warning) << "Failed to set movie_id to Midas";
     }
-    memcached_pool_push(_memcached_client_pool, memcached_client);    
   });
 
   movie_id_future = std::async(std::launch::async, [&]() {
