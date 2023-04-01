@@ -139,9 +139,9 @@ void ComposeReviewHandler::_ComposeAndUpload(
     } else if (i == 1) {
       new_review.movie_id = value_str;
     } else if (i == 2) {
-      new_review.text = value_str;
-    } else if (i == 3) {
       new_review.user_id = std::stoul(value_str);
+    } else if (i == 3) {
+      new_review.text = value_str;
     } else if (i == 4) {
       new_review.rating = std::stoi(value_str);
     }
