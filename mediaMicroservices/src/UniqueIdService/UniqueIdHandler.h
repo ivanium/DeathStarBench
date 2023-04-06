@@ -131,7 +131,7 @@ void UniqueIdHandler::UploadUniqueId(
     compose_client->UploadUniqueId(req_id, review_id, writer_text_map);
   } catch (...) {
     _compose_client_pool->Push(compose_client_wrapper);
-    LOG(error) << "Failed to upload movie_id to compose-review-service";
+    LOG(error) << "Failed to upload unique_id to compose-review-service";
     throw;
   }
   _compose_client_pool->Push(compose_client_wrapper);

@@ -502,7 +502,7 @@ void UserHandler::UploadUserWithUsername(
       compose_client->UploadUserId(req_id, user_id, writer_text_map);
     } catch (...) {
       _compose_client_pool->Push(compose_client_wrapper);
-      LOG(error) << "Failed to upload movie_id to compose-review-service";
+      LOG(error) << "Failed to upload userid to compose-review-service";
       throw;
     }
     _compose_client_pool->Push(compose_client_wrapper);
@@ -520,7 +520,7 @@ void UserHandler::UploadUserWithUsername(
     if (!set_success) {
       LOG(warning)
         << "Failed to set the user_id of user "
-        << username << " to Memcached";
+        << username << " to Midas";
     }
 
     missed_cycles_end += midas::Time::get_cycles_end() - missed_cycles_stt;
@@ -559,7 +559,7 @@ void UserHandler::UploadUserWithUserId(
     compose_client->UploadUserId(req_id, user_id, writer_text_map);
   } catch (...) {
     _compose_client_pool->Push(compose_client_wrapper);
-    LOG(error) << "Failed to upload movie_id to compose-review-service";
+    LOG(error) << "Failed to upload userid to compose-review-service";
     throw;
   }
   _compose_client_pool->Push(compose_client_wrapper);

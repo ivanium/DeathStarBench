@@ -1,6 +1,7 @@
 #!/bin/bash
 
 ./run/down.sh
+./run/cp_services.sh
 ./run/up.sh
 python3 scripts/write_movie_info.py -c datasets/tmdb/casts.json -m datasets/tmdb/movies.json && scripts/register_users.sh && scripts/register_movies.sh
 cd wrk2

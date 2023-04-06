@@ -93,7 +93,7 @@ ComposeReviewHandler::ComposeReviewHandler(
 
 void ComposeReviewHandler::_ComposeAndUpload(
     int64_t req_id, const std::map<std::string, std::string> &writer_text_map) {
-
+  LOG(debug) << "Compose and upload review " << req_id;
   std::string key_unique_id = std::to_string(req_id) + ":review_id";
   std::string key_movie_id = std::to_string(req_id) + ":movie_id";
   std::string key_user_id = std::to_string(req_id) + ":user_id";
@@ -223,6 +223,8 @@ void ComposeReviewHandler::_ComposeAndUpload(
   } catch (...) {
     throw;
   }
+  
+  LOG(debug) << "Finish Compose and upload review " << req_id;
 }
 
 void ComposeReviewHandler::UploadMovieId(
@@ -303,8 +305,8 @@ void ComposeReviewHandler::UploadMovieId(
 void ComposeReviewHandler::UploadUserId(
     int64_t req_id, int64_t user_id,
     const std::map<std::string, std::string> & carrier) {
-  LOG(warning) << "Started upload user id request " << req_id
-                <<  "for user " << user_id;
+  // LOG(warning) << "Started upload user id request " << req_id
+  //               <<  "for user " << user_id;
 
   // Initialize a span
   TextMapReader reader(carrier);
@@ -417,7 +419,7 @@ void ComposeReviewHandler::UploadUniqueId(
     counter_value = *counter_value_ptr;
     free(counter_value_ptr);
   } else if (status == 0) {
-    LOG(error) << "Cannot store user_id of request " << req_id;
+    LOG(error) << "Cannot store unique_id of request " << req_id;
     ServiceException se;
     se.errorCode = ErrorCode::SE_MIDAS_ERROR;
   } else {

@@ -3,7 +3,10 @@ import json
 import optparse
 import time
 
+all_num = 0
+
 def worker(api_key, page_start, page_stop):
+  all_num = 0
   movies_url = "https://api.themoviedb.org/3/movie/popular"
   language="en-US"
   movies = []
@@ -13,18 +16,22 @@ def worker(api_key, page_start, page_stop):
     if (r.status_code != 200):
       print("Failed to get popular_movie", "status_code:", r.status_code, "message:", r.text)
     movies += r.json()["results"]
-    for i in range(len(movies)):
-      movie_id = movies[i]["id"]
-      casts_url = "https://api.themoviedb.org/3/movie/" + str(movie_id) + "/credits"
-      r = requests.request("GET", casts_url, params={"api_key": api_key})
-      if (r.status_code != 200):
-        print("Failed to get popular_movie", "status_code:", r.status_code, "message:", r.text)
-      movies[i]["cast"] = r.json()["cast"]
-      if (len(movies[i]["cast"]) > 10):
-        movies[i]["cast"] = movies[i]["cast"][:10]
-      # rate limit of 4 reqs per second
-      time.sleep(0.25)
     print("page", page, "success")
+
+  print(len(movies))
+  for i in range(len(movies)):
+    movie_id = movies[i]["id"]
+    print(movie_id)
+    casts_url = "https://api.themoviedb.org/3/movie/" + str(movie_id) + "/credits"
+    r = requests.request("GET", casts_url, params={"api_key": api_key})
+    if (r.status_code != 200):
+      print("Failed to get popular_movie", "status_code:", r.status_code, "message:", r.text)
+    movies[i]["cast"] = r.json()["cast"]
+    if (len(movies[i]["cast"]) > 10):
+      movies[i]["cast"] = movies[i]["cast"][:10]
+    # rate limit of 4 reqs per second
+    time.sleep(0.25)
+  print("Get all movies info")
 
   return movies
 

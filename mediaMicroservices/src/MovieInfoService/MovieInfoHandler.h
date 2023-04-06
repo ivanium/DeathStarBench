@@ -77,6 +77,7 @@ void MovieInfoHandler::WriteMovieInfo(
     int32_t num_rating,
     const std::map<std::string, std::string> &carrier) {
   // Initialize a span
+  LOG(debug) << "Movie Title " << title << std::endl;
   TextMapReader reader(carrier);
   std::map<std::string, std::string> writer_text_map;
   TextMapWriter writer(writer_text_map);

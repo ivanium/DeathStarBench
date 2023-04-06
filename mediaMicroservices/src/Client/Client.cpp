@@ -1,611 +1,591 @@
-// #include <chrono>
-// #include <cstdint>
-// #include <future>
-// #include <iostream>
-// #include <limits>
-// #include <memory>
-// #include <random>
-// #include <signal.h>
-// #include <string>
-// #include <thread>
-// #include <thrift/protocol/TBinaryProtocol.h>
-// #include <thrift/server/TThreadedServer.h>
-// #include <thrift/transport/TBufferTransports.h>
-// #include <thrift/transport/TServerSocket.h>
+#include <chrono>
+#include <cstdint>
+#include <future>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <random>
+#include <signal.h>
+#include <string>
+#include <thread>
+#include <thrift/protocol/TBinaryProtocol.h>
+#include <thrift/server/TThreadedServer.h>
+#include <thrift/transport/TBufferTransports.h>
+#include <thrift/transport/TServerSocket.h>
 
-// #include <boost/program_options.hpp>
+#include <boost/program_options.hpp>
 
-// #include "../../gen-cpp/ComposeReviewService.h"
-// #include "../ClientPool.h"
-// #include "../ThriftClient.h"
-// #include "../RedisClient.h"
-// #include "../utils.h"
-// // #include "zipf.hpp"
+#include "../../gen-cpp/media_service_types.h"
+#include "../../gen-cpp/UserService.h"
+#include "../../gen-cpp/TextService.h"
+#include "../../gen-cpp/UniqueIdService.h"
+#include "../../gen-cpp/MovieIdService.h"
+#include "../../gen-cpp/PageService.h"
+#include "../ClientPool.h"
+#include "../ThriftClient.h"
+#include "../utils.h"
 
-// using apache::thrift::protocol::TBinaryProtocolFactory;
-// using apache::thrift::server::TThreadedServer;
-// using apache::thrift::transport::TFramedTransportFactory;
-// using apache::thrift::transport::TServerSocket;
-// using namespace media_service;
+using apache::thrift::protocol::TBinaryProtocolFactory;
+using apache::thrift::server::TThreadedServer;
+using apache::thrift::transport::TFramedTransportFactory;
+using apache::thrift::transport::TServerSocket;
+using namespace media_service;
 
-// // constexpr static uint32_t kNumUsers = 962;
-// constexpr static char kCharSet[] =
-//     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-// constexpr static uint32_t kTextLen = 64;
-// constexpr static uint32_t kUrlLen = 64;
-// constexpr static uint32_t kMaxNumMentionsPerText = 2;
-// constexpr static uint32_t kMaxNumUrlsPerText = 2;
-// constexpr static uint32_t kMaxNumMediasPerText = 2;
-// constexpr static uint32_t kNumThd = 4;
-// constexpr static uint32_t kPerThdWorkload = 100000;
-// constexpr static bool kSkewed = false;
-// constexpr static float kSkewness = 0.99;
+// constexpr static uint32_t kNumUsers = 962;
+constexpr static char kCharSet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+constexpr static uint32_t kTextLen = 256;
+constexpr static uint32_t kNumThd = 4;
+constexpr static uint32_t kNumUsers = 1000;
+constexpr static bool kSkewed = false;
+constexpr static float kSkewness = 0.99;
+constexpr static float kMinReviews = 25;
 
 // constexpr static char kDatasetPath[] = "/datasets/social-graph";
 // constexpr static char kDatasetName[] = "soc-twitter-follows-mun";
-// // constexpr static char kDatasetName[] = "socfb-Reed98";
-
-// void sigintHandler(int sig) { exit(EXIT_SUCCESS); }
-
-// template <typename Service> class WrappedClientPool {
-// public:
-//   void init(std::string service_name) {
-//     if (load_config_file("/config/service-config.json", &config_json) != 0) {
-//       exit(EXIT_FAILURE);
-//     }
-
-//     std::cout << service_name << std::endl;
-
-//     int port = config_json[service_name]["port"];
-//     std::string addr = config_json[service_name]["addr"];
-//     // int conns = config_json[service_name]["connections"];
-//     int conns = 256;
-//     int timeout = config_json[service_name]["timeout_ms"];
-//     int keepalive = config_json[service_name]["keepalive_ms"];
-
-//     std::cout << port << " " << addr << " " << timeout << " done" << std::endl;
-
-//     _client_pool.reset(new ClientPool<Service>(service_name.append("-client"),
-//                                                addr, port, 0, conns, timeout,
-//                                                keepalive, config_json));
-//   }
-
-//   ClientPool<Service> *get() { return _client_pool.get(); }
-
-// private:
-//   json config_json;
-//   std::shared_ptr<ClientPool<Service>> _client_pool;
-// };
-
-// struct SocialNetState {
-//   WrappedClientPool<ThriftClient<SocialGraphServiceClient>> social_graph_client;
-//   WrappedClientPool<ThriftClient<UserServiceClient>> user_service_client;
-//   WrappedClientPool<ThriftClient<ComposePostServiceClient>> compose_post_client;
-//   WrappedClientPool<ThriftClient<HomeTimelineServiceClient>>
-//       home_timeline_client;
-//   WrappedClientPool<ThriftClient<UserTimelineServiceClient>>
-//       user_timeline_client;
-
-//   struct SocialGraph {
-//     int64_t numUsers;
-//     std::vector<std::pair<int64_t, int64_t>> edges;
-//   } graph;
-
-//   std::random_device rd;
-//   std::unique_ptr<std::mt19937> gen;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_1_100;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers;
-//   std::unique_ptr<zipf_table_distribution<>> zipf_0_numusers_1;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnummentions;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnumurls;
-//   std::unique_ptr<std::uniform_int_distribution<>> uniform_0_maxnummedias;
-//   std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64;
-
-//   int64_t getNumUsers() {
-//     return graph.numUsers;
-//   }
-
-//   int loadGraph() {
-//     std::string fullPath = std::string(kDatasetPath) + "/" + kDatasetName +
-//                            "/" + kDatasetName + ".nodes";
-//     std::ifstream nodeFile(fullPath);
-//     if (!nodeFile.is_open()) {
-//       std::cerr << "Could not open file " << fullPath << std::endl;
-//       return -1;
-//     }
-//     nodeFile >> graph.numUsers;
-//     nodeFile.close();
-
-//     fullPath = std::string(kDatasetPath) + "/" + kDatasetName +
-//                            "/" + kDatasetName + ".edges";
-//     std::ifstream edgeFile(fullPath);
-//     if (!edgeFile.is_open()) {
-//       std::cerr << "Could not open file " << fullPath << std::endl;
-//       return -1;
-//     }
-//     int64_t src, dst;
-//     while (edgeFile >> src >> dst) {
-//       graph.edges.push_back(std::pair<int64_t, int64_t>(src, dst));
-//     }
-//     std::cout << graph.numUsers << " " << graph.edges.size() << std::endl;
-//     return 0;
-//   }
-
-//   int init() {
-//     this->user_service_client.init("user-service");
-//     this->compose_post_client.init("compose-post-service");
-//     this->home_timeline_client.init("home-timeline-service");
-//     this->user_timeline_client.init("user-timeline-service");
-//     this->social_graph_client.init("social-graph-service");
-
-//     loadGraph();
-
-//     this->gen.reset(new std::mt19937((this->rd)()));
-//     this->uniform_1_100.reset(new std::uniform_int_distribution<>(1, 100));
-//     this->uniform_1_numusers.reset(
-//         new std::uniform_int_distribution<>(1, getNumUsers()));
-//     this->zipf_0_numusers_1.reset(
-//         new zipf_table_distribution<>(getNumUsers(), kSkewness));
-//     this->uniform_0_charsetsize.reset(
-//         new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
-//     this->uniform_0_maxnummentions.reset(
-//         new std::uniform_int_distribution<>(0, kMaxNumMentionsPerText));
-//     this->uniform_0_maxnumurls.reset(
-//         new std::uniform_int_distribution<>(0, kMaxNumUrlsPerText));
-//     this->uniform_0_maxnummedias.reset(
-//         new std::uniform_int_distribution<>(0, kMaxNumMediasPerText));
-//     this->uniform_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
-//         0, std::numeric_limits<int64_t>::max()));
-//     return 0;
-//   }
-// } state;
-
-// std::string random_string(uint32_t len, const SocialNetState &state) {
-//   std::string str = "";
-//   for (uint32_t i = 0; i < kTextLen; i++) {
-//     auto idx = (*state.uniform_0_charsetsize)(*state.gen);
-//     str += kCharSet[idx];
-//   }
-//   return str;
-// }
-
-// int64_t random_int64() {
-//   return std::chrono::high_resolution_clock::now().time_since_epoch().count();
-// }
-
-// int RegisterUser(int64_t user_id) {
-//   std::map<std::string, std::string> carrier;
-//   int64_t req_id = random_int64();
-//   std::string firstname = "first_" + std::to_string(user_id);
-//   std::string lastname = "last_" + std::to_string(user_id);
-//   std::string username = "user_" + std::to_string(user_id);
-//   std::string password = "password_" + std::to_string(user_id);
-
-//   auto clientPool = state.user_service_client.get();
-//   auto clientWrapper = clientPool->Pop();
-//   if (!clientWrapper) {
-//     ServiceException se;
-//     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-//     se.message = "Failed to connect to user-service";
-//     throw se;
-//   }
-//   auto client = clientWrapper->GetClient();
-//   try {
-//     client->RegisterUserWithId(req_id, firstname, lastname, username, password,
-//                                user_id, carrier);
-//   } catch (...) {
-//     std::cout << "Failed to register user " << user_id << " from user-service"
-//               << std::endl;
-//     state.user_service_client.get()->Remove(clientWrapper);
-//     throw;
-//   }
-//   state.user_service_client.get()->Keepalive(clientWrapper);
-//   return 0;
-// }
-
-// int Follow(int64_t src, int64_t dst) {
-//   std::map<std::string, std::string> carrier;
-//   int64_t req_id = random_int64();
-
-//   auto clientPool = state.social_graph_client.get();
-//   auto clientWrapper = clientPool->Pop();
-//   if (!clientWrapper) {
-//     ServiceException se;
-//     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-//     se.message = "Failed to connect to social-graph-service";
-//     throw se;
-//   }
-//   auto client = clientWrapper->GetClient();
-//   try {
-//     client->Follow(req_id, src, dst, carrier);
-//     client->Follow(req_id, dst, src, carrier);
-//   } catch (...) {
-//     std::cout << "Failed to follow in social-graph-service:" << src << "<->"
-//               << dst << std::endl;
-//     state.social_graph_client.get()->Remove(clientWrapper);
-//     throw;
-//   }
-//   state.social_graph_client.get()->Keepalive(clientWrapper);
-
-//   return 0;
-// }
-
-// int ComposePost(int64_t user_id) {
-//   std::map<std::string, std::string> carrier;
-
-//   int64_t req_id = random_int64();
-//   // int64_t user_id = (*state.uniform_1_numusers)(*state.gen);
-//   std::string username = std::string("username_") + std::to_string(user_id);
-//   std::string text = random_string(kTextLen, state);
-//   int num_user_mentions = (*state.uniform_0_maxnummentions)(*state.gen);
-//   for (uint32_t i = 0; i < num_user_mentions; i++) {
-//     auto mentioned_id = (*state.uniform_1_numusers)(*state.gen);
-//     text += " @username_" + std::to_string(mentioned_id);
-//   }
-//   auto num_urls = (*state.uniform_0_maxnumurls)(*state.gen);
-//   for (uint32_t i = 0; i < num_urls; i++) {
-//     text += " http://" + random_string(kUrlLen, state);
-//   }
-//   int num_medias = (*state.uniform_0_maxnummedias)(*state.gen);
-
-//   std::vector<int64_t> media_ids;
-//   std::vector<std::string> media_types;
-//   for (uint32_t i = 0; i < num_medias; i++) {
-//     media_ids.emplace_back((*state.uniform_0_maxint64)(*state.gen));
-//     media_types.push_back("png");
-//   }
-//   social_network::PostType::type post_type = social_network::PostType::POST;
-
-//   auto clientPool = state.compose_post_client.get();
-//   auto clientWrapper = clientPool->Pop();
-//   if (!clientWrapper) {
-//     ServiceException se;
-//     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-//     se.message = "Failed to connect to compose-post-service";
-//     throw se;
-//   }
-//   auto client = clientWrapper->GetClient();
-//   try {
-//     client->ComposePost(req_id, username, user_id, text, media_ids, media_types,
-//                         post_type, carrier);
-//   } catch (...) {
-//     std::cout << "Failed to compose post from compose-post-service"
-//               << std::endl;
-//     state.compose_post_client.get()->Remove(clientWrapper);
-//     throw;
-//   }
-//   state.compose_post_client.get()->Keepalive(clientWrapper);
-//   return 0;
-// }
-
-// int ReadUserTimeline(int64_t user_id = -1) {
-//   std::map<std::string, std::string> carrier;
-//   if (user_id == -1)
-//     user_id = kSkewed ? ((*state.zipf_0_numusers_1)(*state.gen) + 1)
-//                       : (*state.uniform_1_numusers)(*state.gen);
-//   int64_t req_id = random_int64();
-//   int64_t start = 0;
-//   int64_t stop = 20;
-//   // int64_t start = 0;
-//   // int64_t stop = (*state.uniform_1_100)(*state.gen);
-//   // int64_t start = (*state.uniform_1_100)(*state.gen) % 20;
-//   // int64_t stop = start + 1;
-//   std::vector<social_network::Post> ret;
-
-//   auto clientPool = state.user_timeline_client.get();
-//   auto clientWrapper = clientPool->Pop();
-//   if (!clientWrapper) {
-//     ServiceException se;
-//     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-//     se.message = "Failed to connect to user-timeline-service";
-//     throw se;
-//   }
-//   auto client = clientWrapper->GetClient();
-//   try {
-//     client->ReadUserTimeline(ret, req_id, user_id, start, stop, carrier);
-//   } catch (...) {
-//     std::cout << "Failed to read posts from user-timeline-service" << std::endl;
-//     state.user_timeline_client.get()->Remove(clientWrapper);
-//     throw;
-//   }
-//   state.user_timeline_client.get()->Keepalive(clientWrapper);
-//   return 0;
-// }
-
-// int ReadHomeTimeline() {
-//   std::map<std::string, std::string> carrier;
-//   int64_t user_id = (*state.uniform_1_numusers)(*state.gen);
-//   int64_t req_id = random_int64();
-//   // int64_t start = 0;
-//   // int64_t stop = (*state.uniform_1_100)(*state.gen);
-//   int64_t start = (*state.uniform_1_100)(*state.gen) % 10;
-//   int64_t stop = start + 1;
-//   std::vector<social_network::Post> ret;
-
-//   auto clientPool = state.home_timeline_client.get();
-//   auto clientWrapper = clientPool->Pop();
-//   if (!clientWrapper) {
-//     ServiceException se;
-//     se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
-//     se.message = "Failed to connect to home-timeline-service";
-//     throw se;
-//   }
-//   auto client = clientWrapper->GetClient();
-//   try {
-//     client->ReadHomeTimeline(ret, req_id, user_id, start, stop, carrier);
-//   } catch (...) {
-//     std::cout << "Failed to read posts from home-timeline-service" << std::endl;
-//     state.home_timeline_client.get()->Remove(clientWrapper);
-//     throw;
-//   }
-//   // state.home_timeline_client.get()->Push(clientWrapper);
-//   state.home_timeline_client.get()->Keepalive(clientWrapper);
-//   return 0;
-// }
-
-// int reg_users() {
-//   const int BATCH_SIZE = 100;
-//   auto stt = std::chrono::high_resolution_clock::now();
-//   std::atomic<int64_t> numFinished { 0 };
-
-//   std::vector<std::thread> thds;
-//   for (int tid = 0; tid < kNumThd; tid++) {
-//     thds.push_back(std::thread([&numFinished, tid = tid]() {
-//       const int64_t chunkSize = (state.getNumUsers() + kNumThd - 1) / kNumThd;
-//       const int64_t stt = chunkSize * tid;
-//       const int64_t end = std::min(stt + chunkSize, state.getNumUsers());
-
-//       std::vector<std::future<int>> futures;
-//       for (int uid = stt; uid < end; uid++) {
-//         futures.push_back(std::async(
-//             std::launch::async,
-//             [&](int64_t uid) {
-//               RegisterUser(uid);
-//               return 0;
-//             },
-//             uid));
-//         if (futures.size() >= BATCH_SIZE) {
-//           for (auto &future : futures)
-//             future.get();
-//           futures.clear();
-//           if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0)
-//             std::cout << "Register " << numFinished.load() << " users..."
-//                       << std::endl;
-//         }
-//       }
-
-//       for (auto &future : futures)
-//         future.get();
-//     }));
-//   }
-
-//   for (auto &thd : thds)
-//     thd.join();
-
-//   auto end = std::chrono::high_resolution_clock::now();
-//   std::cout << "Reg users duration: "
-//             << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
-//                    .count()
-//             << "ms"
-//             << std::endl;
-//   return 0;
-// }
-
-// int add_followers() {
-//   const int BATCH_SIZE = 100;
-
-//   auto stt = std::chrono::high_resolution_clock::now();
-//   std::atomic<int64_t> numFinished { 0 };
-//   std::vector<std::thread> thds;
-//   for (int tid = 0; tid < kNumThd; tid++) {
-//     thds.push_back(std::thread([&, tid=tid]() {
-//       std::vector<std::future<int>> futures;
-//       const int64_t numEdges = state.graph.edges.size();
-//       const int64_t chunkSize = (numEdges + kNumThd - 1) / kNumThd;
-//       const int64_t stt = chunkSize * tid;
-//       const int64_t end = std::min(stt + chunkSize, numEdges);
-//       for (int64_t i = stt; i < end; i++) {
-//         auto &edge = state.graph.edges[i];
-//         futures.push_back(std::async(
-//             std::launch::async,
-//             [](int64_t src, int64_t dst) {
-//               Follow(src, dst);
-//               return 0;
-//             },
-//             edge.first, edge.second));
-
-//         if (futures.size() >= BATCH_SIZE) {
-//           for (auto &future : futures)
-//             future.get();
-//           futures.clear();
-//           if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
-//             std::cout << "Finished " << numFinished.load() << std::endl;
-//           }
-//         }
-//       }
-
-//       std::cout << tid << " " << chunkSize << " " << stt << "," << end << std::endl;
-
-//       for (auto &future : futures) {
-//         future.get();
-//       }
-//     }));
-//   }
-
-//   for (auto &thd : thds)
-//     thd.join();
-
-//   auto end = std::chrono::high_resolution_clock::now();
-//   std::cout << "Add followers duration: "
-//             << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
-//                    .count()
-//             << "ms"
-//             << std::endl;
-
-//   return 0;
-// }
-
-// int compose_posts() {
-//   const int BATCH_SIZE = 100;
-//   auto stt = std::chrono::high_resolution_clock::now();
-//   std::atomic<int64_t> numFinished { 0 };
-//   std::vector<std::thread> thds;
-//   for (int tid = 0; tid < kNumThd; tid++) {
-//     thds.push_back(std::thread([&numFinished, tid=tid]() {
-//       std::vector<std::future<int>> futures;
-//       int64_t chunkSize = (state.getNumUsers() + kNumThd - 1) / kNumThd;
-//       int64_t stt = chunkSize * tid;
-//       int64_t end = std::min(stt + chunkSize, state.getNumUsers());
-//       for (int64_t i = stt; i < end; i++) {
-//         futures.push_back(std::async(std::launch::async, [i=i]() {
-//           for (int j = 0; j < 20; j++)
-//             ComposePost(i);
-//           return 0;
-//         }));
-
-//         if (futures.size() % BATCH_SIZE == 0) {
-//           for (auto &future : futures)
-//             future.get();
-//           futures.clear();
-//           if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
-//               std::cout << "Finished users: " << numFinished.load()
-//                         << std::endl;
-//           }
-//         }
-//       }
-//       for (auto &future : futures)
-//         future.get();
-//     }));
-//   }
-
-//   for (auto &thd : thds) {
-//     thd.join();
-//   }
-
-//   auto end = std::chrono::high_resolution_clock::now();
-//   std::cout << "Warm up posts duration: "
-//             << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
-//                    .count()
-//             << "ms" << std::endl;
-
-//   return 0;
-// }
-
-// int read_posts() {
-//   const int BATCH_SIZE = 100;
-//   auto stt = std::chrono::high_resolution_clock::now();
-//   std::cout << "Start reading posts (user timelines)..." << std::endl;
-//   std::atomic<int64_t> numFinished { 0 };
-//   std::vector<std::thread> thds;
-//   for (int tid = 0; tid < kNumThd; tid++) {
-//     thds.push_back(std::thread([&numFinished, tid=tid]() {
-//       std::vector<std::future<int>> futures;
-//       int64_t chunkSize = (state.getNumUsers() + kNumThd - 1) / kNumThd;
-//       int64_t stt = chunkSize * tid;
-//       int64_t end = std::min(stt + chunkSize, state.getNumUsers());
-//       for (int64_t i = stt; i < end; i++) {
-//         futures.push_back(std::async(std::launch::async, [i=i]() {
-//           ReadUserTimeline(i);
-//           return 0;
-//         }));
-
-//         if (futures.size() % BATCH_SIZE == 0) {
-//           for (auto &future : futures)
-//             future.get();
-//           futures.clear();
-//           if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
-//               std::cout << "Finished users: " << numFinished.load()
-//                         << std::endl;
-//           }
-//         }
-//       }
-//       for (auto &future : futures)
-//         future.get();
-//     }));
-//   }
-
-//   for (auto &thd : thds) {
-//     thd.join();
-//   }
-
-//   auto end = std::chrono::high_resolution_clock::now();
-//   std::cout << "Read posts (user timelines) duration: "
-//             << std::chrono::duration_cast<std::chrono::milliseconds>(end - stt)
-//                    .count()
-//             << "ms" << std::endl;
-
-//   return 0;
-// }
-
-// int do_work() {
-//   auto stt = std::chrono::high_resolution_clock::now();
-//   std::vector<std::thread> thds;
-//   for (int tid = 0; tid < 1; tid++) {
-//     thds.push_back(std::thread([]() {
-//       std::vector<std::future<int>> futures;
-//       for (int i = 0; i < kPerThdWorkload; i++) {
-//         futures.push_back(std::async(std::launch::async, []() {
-//           ReadUserTimeline();
-//           // ReadHomeTimeline();
-//           std::this_thread::sleep_for(std::chrono::microseconds(50));
-//           return 0;
-//         }));
-
-//         if (futures.size() >= 500) {
-//           for (auto &future : futures)
-//             future.get();
-//           futures.clear();
-//         }
-//       }
-
-//       for (auto &future : futures) {
-//         future.get();
-//       }
-//     }));
-//   }
-
-//   for (auto &thd : thds) {
-//     thd.join();
-//   }
-
-//   auto end = std::chrono::high_resolution_clock::now();
-//   auto dur =
-//       std::chrono::duration_cast<std::chrono::milliseconds>(end - stt).count();
-//   std::cout << "Duration: " << dur << " ms" << std::endl;
-
-//   std::cout << "Throughput: " << 1.0 * kPerThdWorkload / dur << " Kops"
-//             << std::endl;
-
-//   return 0;
-// }
-
-// int main(int argc, char *argv[]) {
-//   state.init();
-
-//   bool init = false;
-//   bool warmup = false;
-//   if (argc > 1) {
-//     if (strncmp(argv[1], "init", 4) == 0)
-//       init = true;
-//     if (strncmp(argv[1], "warmup", 6) == 0)
-//       warmup = true;
-//   }
-//   if (init) {
-//     reg_users();
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-//     add_followers();
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-//     compose_posts();
-//   }
-
-//   if (warmup)
-//     read_posts();
-
-//   for (int i = 0; i < 10; i++) {
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-//     do_work();
-//   }
-
-//   return 0;
-// }
+// constexpr static char kDatasetName[] = "socfb-Reed98";
+
+void sigintHandler(int sig) { exit(EXIT_SUCCESS); }
+
+template <typename Service> class WrappedClientPool {
+public:
+  void init(std::string service_name) {
+    if (load_config_file("/config/service-config.json", &config_json) != 0) {
+      exit(EXIT_FAILURE);
+    }
+
+    std::cout << service_name << std::endl;
+
+    int port = config_json[service_name]["port"];
+    std::string addr = config_json[service_name]["addr"];
+    // int conns = config_json[service_name]["connections"];
+    int conns = 256;
+    int timeout = 10000;
+    int keepalive = 10000;
+
+    std::cout << port << " " << addr << " " << timeout << " done" << std::endl;
+
+    _client_pool.reset(new ClientPool<Service>(service_name.append("-client"),
+                                               addr, port, 0, conns, timeout));
+  }
+
+  ClientPool<Service> *get() { return _client_pool.get(); }
+
+private:
+  json config_json;
+  std::shared_ptr<ClientPool<Service>> _client_pool;
+};
+
+struct SocialNetState {
+  WrappedClientPool<ThriftClient<MovieIdServiceClient>> movieid_service_client;
+  WrappedClientPool<ThriftClient<UserServiceClient>> user_service_client;
+  WrappedClientPool<ThriftClient<TextServiceClient>> text_service_client;
+  WrappedClientPool<ThriftClient<UniqueIdServiceClient>> uniqueid_service_client;
+  WrappedClientPool<ThriftClient<PageServiceClient>> page_service_client;
+
+  json movie_names;
+  json movie_ids;
+
+  std::random_device rd;
+  std::unique_ptr<std::mt19937> gen;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_10;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_nummovies;
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize;
+  std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64;
+
+  int loadMovieName() {
+    if (load_config_file("/config/names.json", &movie_names) != 0) {
+      exit(EXIT_FAILURE);
+    }
+    return 0;
+  }
+
+  int loadMovieIds() {
+    if (load_config_file("/config/ids.json", &movie_ids) != 0) {
+      exit(EXIT_FAILURE);
+    }
+    return 0;
+  }
+
+  int getNumMovies() {
+    return movie_names.size();
+  }
+
+  int init() {
+    this->user_service_client.init("user-service");
+    this->movieid_service_client.init("movie-id-service");
+    this->uniqueid_service_client.init("unique-id-service");
+    this->text_service_client.init("text-service");
+    this->page_service_client.init("page-service");
+
+    loadMovieName();
+    loadMovieIds();
+
+    this->gen.reset(new std::mt19937((this->rd)()));
+    this->uniform_1_10.reset(new std::uniform_int_distribution<>(1, 10));
+    this->uniform_1_numusers.reset(new std::uniform_int_distribution<>(1, kNumUsers));
+    this->uniform_1_nummovies.reset(
+        new std::uniform_int_distribution<>(1, getNumMovies()));
+    this->uniform_0_charsetsize.reset(
+        new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
+    this->uniform_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
+        0, std::numeric_limits<int64_t>::max()));
+    return 0;
+  }
+} state;
+
+std::string random_string(uint32_t len, const SocialNetState &state) {
+  std::string str = "";
+  for (uint32_t i = 0; i < kTextLen; i++) {
+    auto idx = (*state.uniform_0_charsetsize)(*state.gen);
+    str += kCharSet[idx];
+  }
+  return str;
+}
+
+int64_t random_int64() {
+  return std::chrono::high_resolution_clock::now().time_since_epoch().count();
+}
+
+std::atomic<int64_t> failed_count(0);
+
+std::atomic<int64_t> read_failed_count(0);
+
+
+int UploadUserId(int64_t req_id, std::string username) {
+  std::map<std::string, std::string> carrier;
+  auto clientPool = state.user_service_client.get();
+  auto clientWrapper = clientPool->Pop();
+  if (!clientWrapper) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+    se.message = "Failed to connect to user-service";
+    throw se;
+  }
+  auto client = clientWrapper->GetClient();
+  try {
+    client->UploadUserWithUsername(req_id, username, carrier);
+  } catch (...) {
+    std::cout << "Failed to upload user" << username << " from user-service"
+              << std::endl;
+    // state.user_service_client.get()->Remove(clientWrapper);
+     state.user_service_client.get()->Push(clientWrapper);
+    throw;
+  }
+  state.user_service_client.get()->Push(clientWrapper);
+  return 0;
+}
+
+int UploadUniqueId(int64_t req_id) {
+  std::map<std::string, std::string> carrier;
+  auto clientPool = state.uniqueid_service_client.get();
+  auto clientWrapper = clientPool->Pop();
+  if (!clientWrapper) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+    se.message = "Failed to connect to user-service";
+    throw se;
+  }
+  auto client = clientWrapper->GetClient();
+  try {
+    client->UploadUniqueId(req_id, carrier);
+  } catch (...) {
+    std::cout << "Failed to upload unique id" << req_id << " from unique-id-service"
+              << std::endl;
+    // state.uniqueid_service_client.get()->Remove(clientWrapper);
+    state.uniqueid_service_client.get()->Push(clientWrapper);
+    throw;
+  }
+  state.uniqueid_service_client.get()->Push(clientWrapper);
+  return 0;
+}
+
+int UploadText(int64_t req_id, std::string text) {
+  std::map<std::string, std::string> carrier;
+  auto clientPool = state.text_service_client.get();
+  auto clientWrapper = clientPool->Pop();
+  if (!clientWrapper) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+    se.message = "Failed to connect to user-service";
+    throw se;
+  }
+  auto client = clientWrapper->GetClient();
+  try {
+    client->UploadText(req_id, text, carrier);
+  } catch (...) {
+    std::cout << "Failed to upload text" << text << " from text-service"
+              << std::endl;
+    // state.text_service_client.get()->Remove(clientWrapper);
+    state.text_service_client.get()->Push(clientWrapper);
+    throw;
+  }
+  state.text_service_client.get()->Push(clientWrapper);
+  return 0;
+}
+
+int UploadMovieId(int64_t req_id, std::string title, int32_t rating) {
+  std::map<std::string, std::string> carrier;
+  auto clientPool = state.movieid_service_client.get();
+  auto clientWrapper = clientPool->Pop();
+  if (!clientWrapper) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+    se.message = "Failed to connect to user-service";
+    throw se;
+  }
+  auto client = clientWrapper->GetClient();
+  try {
+    client->UploadMovieId(req_id, title, rating, carrier);
+  } catch (...) {
+    std::cout << "Failed to upload movie" << title << " from movie-id-service"
+              << std::endl;
+    // state.movieid_service_client.get()->Remove(clientWrapper);
+    state.movieid_service_client.get()->Push(clientWrapper);
+    throw;
+  }
+  state.movieid_service_client.get()->Push(clientWrapper);
+  return 0;
+}
+
+
+int ComposeReview(int tid) {
+  
+  // std::cout << "Started Compose Review"<<std::chrono::high_resolution_clock::now().time_since_epoch().count()<<std::flush;
+  std::map<std::string, std::string> carrier;
+  int64_t tid_64 = tid;
+  int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
+  int32_t user_id = ((*state.uniform_1_numusers)(*state.gen));
+  std::string username = std::string("username_") + std::to_string(user_id);
+  std::string movie = state.movie_names[(*state.uniform_1_nummovies)(*state.gen) - 1];
+  std::string text = random_string(kTextLen, state);
+  int32_t rating = (*state.uniform_1_10)(*state.gen);
+  std::vector<std::future<int>> futures;
+  std::atomic<int> count(0);
+  futures.push_back(std::async(std::launch::async, [req_id=req_id, username=username, count_addr=&count]() {
+    try{
+      UploadUserId(req_id, username);
+    }catch (...) {
+      *count_addr += 1;
+    }
+    return 0;
+  }));
+  futures.push_back(std::async(std::launch::async, [req_id=req_id, title=movie, rating=rating, count_addr=&count]() {
+    try{
+      UploadMovieId(req_id, title, rating);
+    }
+    catch (...) {
+      *count_addr += 1;
+    }
+    return 0;
+  }));
+  futures.push_back(std::async(std::launch::async, [req_id=req_id, text=text, count_addr=&count]() {
+    try{
+      UploadText(req_id, text);
+    }
+    catch (...) {
+      *count_addr += 1;
+    }
+    return 0;
+  }));
+  futures.push_back(std::async(std::launch::async, [req_id=req_id, count_addr=&count]() {
+    try{
+      UploadUniqueId(req_id);
+    }
+    catch (...) {
+      *count_addr += 1;
+    }
+    return 0;
+  }));
+
+  for (auto &future : futures)
+    future.get();
+  
+  if(count != 0) {
+    std::cout << "Compose Review Failed: fail service count"<< count <<std::endl<<std::flush;  
+    failed_count ++;
+  }
+
+  return 0;
+}
+
+int compose_reviews(int64_t num_reviews) {
+  const int BATCH_SIZE = 10;
+  auto stt = std::chrono::high_resolution_clock::now();
+  std::atomic<int64_t> numFinished { 0 };
+  std::vector<std::thread> thds;
+  for (int tid = 0; tid < kNumThd; tid++) {
+    thds.push_back(std::thread([&numFinished, tid=tid, num_reviews=num_reviews]() {
+      std::vector<std::future<int>> futures;
+      int64_t chunkSize = (num_reviews + kNumThd - 1) / kNumThd;
+      int64_t stt = chunkSize * tid;
+      int64_t end = std::min(stt + chunkSize, num_reviews);
+      for (int64_t i = stt; i < end; i++) {
+        futures.push_back(std::async(std::launch::async, [tid=tid]() {
+          ComposeReview(tid);
+          return 0;
+        }));
+
+        if (futures.size() % BATCH_SIZE == 0) {
+          for (auto &future : futures)
+            future.get();
+          futures.clear();
+          if (numFinished.fetch_add(BATCH_SIZE) % 10000 == 0) {
+              std::cout << "Finished reviews: " << numFinished.load()
+                        << std::endl;
+          }
+        }
+      }
+      for (auto &future : futures)
+        future.get();
+    }));
+  }
+
+  for (auto &thd : thds) {
+    thd.join();
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  auto dur =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - stt).count();
+  std::cout << "Duration: " << dur << " ms" << std::endl;
+  std::cout << "Failed Count: " << failed_count << std::endl;
+
+  std::cout << "Throughput: " << 1.0 * num_reviews / dur << " Kops"
+            << std::endl;
+
+  return 0;
+}
+
+
+int PreComposeReview(int tid, int64_t movie_index) {
+  
+  // std::cout << "Started Compose Review"<<std::chrono::high_resolution_clock::now().time_since_epoch().count()<<std::flush;
+  std::map<std::string, std::string> carrier;
+  int64_t tid_64 = tid;
+  std::string movie = state.movie_names[movie_index];
+
+  int success_count = 0;
+
+  for (int i = 0 ; i < kMinReviews; i ++ ){
+    int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
+    int32_t user_id = ((*state.uniform_1_numusers)(*state.gen));
+    std::string username = std::string("username_") + std::to_string(user_id);
+    std::string text = random_string(kTextLen, state);
+    int32_t rating = (*state.uniform_1_10)(*state.gen);
+    std::vector<std::future<int>> futures;
+    std::atomic<int> count(0);
+    futures.push_back(std::async(std::launch::async, [req_id=req_id, username=username, count_addr=&count]() {
+      try{
+        UploadUserId(req_id, username);
+      }catch (...) {
+        *count_addr += 1;
+      }
+      return 0;
+    }));
+    futures.push_back(std::async(std::launch::async, [req_id=req_id, title=movie, rating=rating, count_addr=&count]() {
+      try{
+        UploadMovieId(req_id, title, rating);
+      }
+      catch (...) {
+        *count_addr += 1;
+      }
+      return 0;
+    }));
+    futures.push_back(std::async(std::launch::async, [req_id=req_id, text=text, count_addr=&count]() {
+      try{
+        UploadText(req_id, text);
+      }
+      catch (...) {
+        *count_addr += 1;
+      }
+      return 0;
+    }));
+    futures.push_back(std::async(std::launch::async, [req_id=req_id, count_addr=&count]() {
+      try{
+        UploadUniqueId(req_id);
+      }
+      catch (...) {
+        *count_addr += 1;
+      }
+      return 0;
+    }));
+
+    for (auto &future : futures)
+      future.get();
+    
+    if(count == 0) {
+      success_count ++;
+    }
+  }
+  
+  if(success_count < kMinReviews - 5) {
+    std::cout << "Pre load reviews count not enough for movie: "<< movie << " and the succeeded count is " << success_count <<std::endl<<std::flush;
+  }
+  // else {
+  //   std::cout << "Pre load reviews count enough for movie: "<< movie << " and the succeeded count is " << success_count <<std::endl<<std::flush;
+  // }
+
+  return 0;
+}
+
+int pre_compose_reviews() {
+  const int BATCH_SIZE = 10;
+  auto stt = std::chrono::high_resolution_clock::now();
+  std::atomic<int64_t> numFinished { 0 };
+  std::vector<std::thread> thds;
+  for (int tid = 0; tid < kNumThd; tid++) {
+    thds.push_back(std::thread([&numFinished, tid=tid, num_movies=state.getNumMovies()]() {
+      std::vector<std::future<int>> futures;
+      int64_t chunkSize = (num_movies + kNumThd - 1) / kNumThd;
+      int64_t stt = chunkSize * tid;
+      int64_t end = std::min(stt + chunkSize, (int64_t)num_movies);
+      for (int64_t i = stt; i < end; i++) {
+        futures.push_back(std::async(std::launch::async, [tid=tid, index=i]() {
+          PreComposeReview(tid, index);
+          return 0;
+        }));
+
+        if (futures.size() % BATCH_SIZE == 0) {
+          for (auto &future : futures)
+            future.get();
+          futures.clear();
+          if (numFinished.fetch_add(BATCH_SIZE) % 1000 == 0) {
+              std::cout << "Finished reviews for movies: " << numFinished.load()
+                        << std::endl;
+          }
+        }
+      }
+      for (auto &future : futures)
+        future.get();
+    }));
+  }
+
+  for (auto &thd : thds) {
+    thd.join();
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  auto dur =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - stt).count();
+  std::cout << "Duration: " << dur << " ms" << std::endl;
+  std::cout << "Failed Count: " << failed_count << std::endl;
+
+  std::cout << "Throughput: " << 1.0 * state.getNumMovies() * kMinReviews / dur << " Kops"
+            << std::endl;
+
+  return 0;
+}
+
+
+int CallPageService(Page& page, int64_t req_id, std::string movie_id, int32_t start, int32_t end) {
+  std::map<std::string, std::string> carrier;
+  auto clientPool = state.page_service_client.get();
+  auto clientWrapper = clientPool->Pop();
+  if (!clientWrapper) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_THRIFT_CONN_ERROR;
+    se.message = "Failed to connect to user-service";
+    throw se;
+  }
+  auto client = clientWrapper->GetClient();
+  try {
+    client->ReadPage(page, req_id, movie_id, start, end, carrier);
+  } catch (...) {
+    std::cout << "Failed to read page" << movie_id << " from page-service"
+              << std::endl;
+    // state.movieid_service_client.get()->Remove(clientWrapper);
+    state.page_service_client.get()->Push(clientWrapper);
+    throw;
+  }
+  state.page_service_client.get()->Push(clientWrapper);
+  return 0;
+}
+
+
+
+int ReadPage(int tid) {
+  Page page;
+  std::map<std::string, std::string> carrier;
+  int64_t tid_64 = tid;
+  int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
+  std::string movie_id = state.movie_ids[(*state.uniform_1_nummovies)(*state.gen) - 1];
+  int32_t start = (*state.uniform_1_10)(*state.gen) - 1;
+  int32_t end = start + (*state.uniform_1_10)(*state.gen);
+  // int32_t start = 0;
+  // int32_t end = 1;
+  try{
+    CallPageService(page, req_id, movie_id, start, end);
+  }catch (...) {
+    std::cout << "Read page failed"<<std::endl<<std::flush;  
+    read_failed_count ++;
+  }
+  return 0;
+}
+
+
+int read_pages(int64_t num_pages) {
+  const int BATCH_SIZE = 10;
+  auto stt = std::chrono::high_resolution_clock::now();
+  std::atomic<int64_t> numFinished { 0 };
+  std::vector<std::thread> thds;
+  for (int tid = 0; tid < kNumThd; tid++) {
+    thds.push_back(std::thread([&numFinished, tid=tid, num_pages=num_pages]() {
+      std::vector<std::future<int>> futures;
+      int64_t chunkSize = (num_pages + kNumThd - 1) / kNumThd;
+      int64_t stt = chunkSize * tid;
+      int64_t end = std::min(stt + chunkSize, num_pages);
+      for (int64_t i = stt; i < end; i++) {
+        futures.push_back(std::async(std::launch::async, [tid=tid]() {
+          ReadPage(tid);
+          return 0;
+        }));
+
+        if (futures.size() % BATCH_SIZE == 0) {
+          for (auto &future : futures)
+            future.get();
+          futures.clear();
+          if (numFinished.fetch_add(BATCH_SIZE) % 100 == 0) {
+              std::cout << "Finished reading pages: " << numFinished.load()
+                        << std::endl;
+          }
+        }
+      }
+      for (auto &future : futures)
+        future.get();
+    }));
+  }
+
+  for (auto &thd : thds) {
+    thd.join();
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  auto dur =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end - stt).count();
+  std::cout << "Duration: " << dur << " ms" << std::endl;
+  std::cout << "Failed Count: " << read_failed_count << std::endl;
+
+  std::cout << "Throughput: " << 1.0 * num_pages / dur << " Kops"
+            << std::endl;
+
+  return 0;
+}
+
+
+int main(int argc, char *argv[]) {
+  state.init();
+  int64_t num_reviews = 1000;
+  int64_t num_pages = 10;
+  if (argc > 1) {
+    num_reviews = atoll(argv[1]);
+  }
+  if (argc > 2) {
+    num_pages = atoll(argv[2]);
+  }
+  pre_compose_reviews();
+  read_pages(num_pages);
+  compose_reviews(num_reviews);
+  return 0;
+}

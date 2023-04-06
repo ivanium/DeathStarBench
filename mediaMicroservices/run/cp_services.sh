@@ -3,7 +3,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
-apps=( CastInfoService ComposeReviewService MovieIdService MovieReviewService RatingService ReviewStorageService TextService UniqueIdService UserReviewService UserService PlotService MovieInfoService PageService)
+apps=( CastInfoService ComposeReviewService MovieIdService MovieReviewService RatingService ReviewStorageService TextService UniqueIdService UserReviewService UserService PlotService MovieInfoService PageService Client)
 
 for app in ${apps[@]}
 do

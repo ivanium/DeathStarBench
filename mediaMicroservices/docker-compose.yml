@@ -312,6 +312,18 @@ services:
 #      - 11221:11211
     restart: always
 
+  page-service:
+    image: media_buildbase:latest
+    hostname: page-service
+#    ports:
+#      - 10012:9090
+    restart: always
+    entrypoint: /services/PageService
+    volumes:
+      - /dev/shm:/dev/shm
+      - ./services:/services
+      - ./config:/config
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     hostname: jaeger
