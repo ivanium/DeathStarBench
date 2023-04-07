@@ -64,7 +64,7 @@ UserTimelineHandler::UserTimelineHandler(
     se.message = "Failed to create midas cache pool!";
     throw se;
   };
-  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
   _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _redis_client_pool = redis_pool;
   _redis_cluster_client_pool = nullptr;
