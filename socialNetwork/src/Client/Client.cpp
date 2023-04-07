@@ -43,7 +43,7 @@ constexpr static uint32_t kMaxNumUrlsPerText = 2;
 constexpr static uint32_t kMaxNumMediasPerText = 2;
 constexpr static uint32_t kNumThd = 4;
 constexpr static uint32_t kPerThdWorkload = 100000;
-constexpr static bool kSkewed = false;
+constexpr static bool kSkewed = true;
 constexpr static float kSkewness = 0.99;
 
 constexpr static char kDatasetPath[] = "/datasets/social-graph";
@@ -64,7 +64,7 @@ public:
     int port = config_json[service_name]["port"];
     std::string addr = config_json[service_name]["addr"];
     // int conns = config_json[service_name]["connections"];
-    int conns = 256;
+    int conns = 128;
     int timeout = config_json[service_name]["timeout_ms"];
     int keepalive = config_json[service_name]["keepalive_ms"];
 
