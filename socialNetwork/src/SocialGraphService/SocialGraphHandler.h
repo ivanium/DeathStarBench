@@ -19,6 +19,11 @@
 #include "../logger.h"
 #include "../tracing.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+constexpr static int32_t kNumBuckets = 1 << 20;
+
 using namespace sw::redis;
 
 namespace social_network {
@@ -55,6 +60,9 @@ class SocialGraphHandler : public SocialGraphServiceIf {
   Redis *_redis_client_pool;
   RedisCluster *_redis_cluster_client_pool;
   ClientPool<ThriftClient<UserServiceClient>> *_user_service_client_pool;
+  // [Midas]
+  midas::CachePool *_pool;
+  std::unique_ptr<midas::SyncKV<kNumBuckets>> _graph_cache;
 };
 
 SocialGraphHandler::SocialGraphHandler(
@@ -64,6 +72,17 @@ SocialGraphHandler::SocialGraphHandler(
   _redis_client_pool = redis_client_pool;
   _redis_cluster_client_pool = nullptr;
   _user_service_client_pool = user_service_client_pool;
+  // [Midas]
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("posts") ||
+      (_pool = cmanager->get_pool("posts")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _graph_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
 SocialGraphHandler::SocialGraphHandler(
@@ -74,6 +93,17 @@ SocialGraphHandler::SocialGraphHandler(
   _redis_client_pool = nullptr;
   _redis_cluster_client_pool = redis_cluster_client_pool;
   _user_service_client_pool = user_service_client_pool;
+  // [Midas]
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("posts") ||
+      (_pool = cmanager->get_pool("posts")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _graph_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
 void SocialGraphHandler::Follow(
