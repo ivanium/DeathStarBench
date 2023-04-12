@@ -1,4 +1,4 @@
-version: "3.9"
+version: "3.4"
 services:
   social-graph-service:
     image: socialnet_buildbase:latest
@@ -6,10 +6,8 @@ services:
     #    ports:
     #      - 10000:9090
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      social-graph-mongodb:
-        condition: service_started
+      - jaeger-agent
+      - social-graph-mongodb
     # restart: always
     entrypoint: /services/SocialGraphService
     volumes:
@@ -53,8 +51,7 @@ services:
     #      - 10001:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     entrypoint: /services/ComposePostService
     volumes:
       - /dev/shm:/dev/shm
@@ -68,10 +65,8 @@ services:
       - 10002:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      post-storage-mongodb:
-        condition: service_started
+      - jaeger-agent
+      - post-storage-mongodb
     entrypoint: /services/PostStorageService
     volumes:
       - /dev/shm:/dev/shm
@@ -108,10 +103,8 @@ services:
     #      - 10003:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      user-timeline-mongodb:
-        condition: service_started
+      - jaeger-agent
+      - user-timeline-mongodb
     entrypoint: /services/UserTimelineService
     volumes:
       - /dev/shm:/dev/shm
@@ -149,10 +142,8 @@ services:
     restart: always
     entrypoint: /services/UrlShortenService
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      url-shorten-mongodb:
-        condition: service_started
+      - jaeger-agent
+      - url-shorten-mongodb
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -188,10 +179,8 @@ services:
     #      - 10005:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      user-mongodb:
-        condition: service_started
+        - jaeger-agent
+        - user-mongodb
     entrypoint: /services/UserService
     volumes:
       - /dev/shm:/dev/shm
@@ -226,10 +215,8 @@ services:
     #    ports:
     #      - 10006:9090
     depends_on:
-      jaeger-agent:
-        condition: service_started
-      media-mongodb:
-        condition: service_started
+      - jaeger-agent
+      - media-mongodb
     restart: always
     entrypoint: /services/MediaService
     volumes:
@@ -266,8 +253,7 @@ services:
     #      - 10007:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     entrypoint: /services/TextService
     volumes:
       - /dev/shm:/dev/shm
@@ -281,8 +267,7 @@ services:
     #      - 10008:9090
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     entrypoint: /services/UniqueIdService
     volumes:
       - /dev/shm:/dev/shm
@@ -295,8 +280,7 @@ services:
     #    ports:
     #      - 10009:9090
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     restart: always
     entrypoint: /services/UserMentionService
     volumes:
@@ -310,8 +294,7 @@ services:
     #    ports:
     #      - 10010:9090
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     restart: always
     entrypoint: /services/HomeTimelineService
     volumes:
@@ -325,8 +308,7 @@ services:
     ports:
       - 8080:8080
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     restart: always
     volumes:
       - ./nginx-web-server/lua-scripts:/usr/local/openresty/nginx/lua-scripts
@@ -343,8 +325,7 @@ services:
       - 8081:8080
     restart: always
     depends_on:
-      jaeger-agent:
-        condition: service_started
+      - jaeger-agent
     volumes:
       - ./media-frontend/lua-scripts:/usr/local/openresty/nginx/lua-scripts
       - ./media-frontend/conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf

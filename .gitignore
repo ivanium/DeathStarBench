@@ -14,3 +14,12 @@ socialNetwork/bench
 **/.cache
 
 compile_commands.json
+
+mediaMicroservices/dbs
+mediaMicroservices/services
+mediaMicroservices/db_backups
+mediaMicroservices/MovieId.log
+mediaMicroservices/MovieInfo.log
+mediaMicroservices/CastInf.log
+mediaMicroservices/compose.log
+mediaMicroservices/page.log

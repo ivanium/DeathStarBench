@@ -1,0 +1,8 @@
+mediamicroservices_plot-mongodb_1
+mediamicroservices_user-mongodb_1
+mediamicroservices_cast-info-mongodb_1
+mediamicroservices_movie-id-mongodb_1
+mediamicroservices_user-review-mongodb_1
+mediamicroservices_movie-info-mongodb_1
+mediamicroservices_movie-review-mongodb_1
+mediamicroservices_review-storage-mongodb_1

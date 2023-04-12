@@ -83,7 +83,7 @@ ComposeReviewHandler::ComposeReviewHandler(
     se.message = "Failed to create midas cache pool!";
     throw se;
   };
-  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _pool->update_limit(20ull * 1024 * 1024 * 1024); // ~1GB
   _review_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 
   _review_storage_client_pool = review_storage_client_pool;

@@ -3,7 +3,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
-MIDAS_DIR=$HOME/code/cachebank
+MIDAS_DIR=$HOME/cachebank
 
 IMAGE_NAME=socialnet_buildbase
 CONTAINER_NAME=${IMAGE_NAME}

@@ -57,7 +57,7 @@ CastInfoHandler::CastInfoHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(1ull * 1024 * 1024 * 1024); // ~1GB
+  _pool->update_limit(5ull * 1024 * 1024 * 1024); // ~1GB
   _cast_info_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 
   _mongodb_client_pool = mongodb_client_pool;
@@ -279,7 +279,7 @@ void CastInfoHandler::ReadCastInfo(
     // } catch (...) {
     //   LOG(warning) << "Failed to set cast-info to memcached";
     // }
-    LOG(error) << "cast-info-service return set incomplete";
+    LOG(error) << "cast-info-service return set incomplete" << return_map.size() << "!=" << cast_info_ids.size();
     ServiceException se;
     se.errorCode = ErrorCode::SE_THRIFT_HANDLER_ERROR;
     se.message = "cast-info-service return set incomplete";

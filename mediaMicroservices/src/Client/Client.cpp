@@ -36,10 +36,13 @@ constexpr static char kCharSet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 constexpr static uint32_t kTextLen = 256;
 constexpr static uint32_t kNumThd = 2;
-constexpr static uint32_t kNumUsers = 1000;
+constexpr static uint32_t kNumUsers = 100000;
 constexpr static bool kSkewed = false;
 constexpr static float kSkewness = 0.99;
 constexpr static float kMinReviews = 25;
+
+
+constexpr static uint32_t kEvalThd = 96;
 
 uint64_t CPU_FREQ = 0;
 
@@ -112,13 +115,13 @@ struct SocialNetState {
   json movie_names;
   json movie_ids;
 
-  std::random_device rd;
-  std::unique_ptr<std::mt19937> gen;
-  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_10;
-  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers;
-  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_nummovies;
-  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize;
-  std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64;
+  std::random_device rd[kEvalThd];
+  std::unique_ptr<std::mt19937> gen[kEvalThd];
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_10[kEvalThd];
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers[kEvalThd];
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_1_nummovies[kEvalThd];
+  std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize[kEvalThd];
+  std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64[kEvalThd];
 
   int loadMovieName() {
     if (load_config_file("/config/names.json", &movie_names) != 0) {
@@ -148,24 +151,26 @@ struct SocialNetState {
     loadMovieName();
     loadMovieIds();
 
-    this->gen.reset(new std::mt19937((this->rd)()));
-    this->uniform_1_10.reset(new std::uniform_int_distribution<>(1, 10));
-    this->uniform_1_numusers.reset(new std::uniform_int_distribution<>(1, kNumUsers));
-    this->uniform_1_nummovies.reset(
-        new std::uniform_int_distribution<>(1, getNumMovies()));
-    this->uniform_0_charsetsize.reset(
-        new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
-    this->uniform_0_maxint64.reset(new std::uniform_int_distribution<int64_t>(
-        0, std::numeric_limits<int64_t>::max()));
+    for (int i = 0; i< kEvalThd; i ++) {
+      this->gen[i].reset(new std::mt19937((this->rd[i])()));
+      this->uniform_1_10[i].reset(new std::uniform_int_distribution<>(1, 10));
+      this->uniform_1_numusers[i].reset(new std::uniform_int_distribution<>(1, kNumUsers));
+      this->uniform_1_nummovies[i].reset(
+          new std::uniform_int_distribution<>(1, getNumMovies()));
+      this->uniform_0_charsetsize[i].reset(
+          new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
+      this->uniform_0_maxint64[i].reset(new std::uniform_int_distribution<int64_t>(
+          0, std::numeric_limits<int64_t>::max()));
+    }
 
     return 0;
   }
 } state;
 
-std::string random_string(uint32_t len, const SocialNetState &state) {
+std::string random_string(uint32_t len, const SocialNetState &state, int tid) {
   std::string str = "";
   for (uint32_t i = 0; i < kTextLen; i++) {
-    auto idx = (*state.uniform_0_charsetsize)(*state.gen);
+    auto idx = (*state.uniform_0_charsetsize[tid])(*state.gen[tid]);
     str += kCharSet[idx];
   }
   return str;
@@ -283,11 +288,11 @@ int ComposeReview(int tid) {
   std::map<std::string, std::string> carrier;
   int64_t tid_64 = tid;
   int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
-  int32_t user_id = ((*state.uniform_1_numusers)(*state.gen));
+  int32_t user_id = ((*state.uniform_1_numusers[tid])(*state.gen[tid]));
   std::string username = std::string("username_") + std::to_string(user_id);
-  std::string movie = state.movie_names[(*state.uniform_1_nummovies)(*state.gen) - 1];
-  std::string text = random_string(kTextLen, state);
-  int32_t rating = (*state.uniform_1_10)(*state.gen);
+  std::string movie = state.movie_names[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
+  std::string text = random_string(kTextLen, state, tid);
+  int32_t rating = (*state.uniform_1_10[tid])(*state.gen[tid]);
   std::vector<std::future<int>> futures;
   std::atomic<int> count(0);
   futures.push_back(std::async(std::launch::async, [req_id=req_id, username=username, count_addr=&count]() {
@@ -397,10 +402,10 @@ int PreComposeReview(int tid, int64_t movie_index) {
   for (int i = 0 ; i < kMinReviews; i ++ ){
     std::map<std::string, std::string> carrier;
     int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
-    int32_t user_id = ((*state.uniform_1_numusers)(*state.gen));
+    int32_t user_id = ((*state.uniform_1_numusers[tid])(*state.gen[tid]));
     std::string username = std::string("username_") + std::to_string(user_id);
-    std::string text = random_string(kTextLen, state);
-    int32_t rating = (*state.uniform_1_10)(*state.gen);
+    std::string text = random_string(kTextLen, state, tid);
+    int32_t rating = (*state.uniform_1_10[tid])(*state.gen[tid]);
     std::vector<std::future<int>> futures;
     std::atomic<int> count(0);
     futures.push_back(std::async(std::launch::async, [req_id=req_id, username=username, count_addr=&count]() {
@@ -458,7 +463,7 @@ int PreComposeReview(int tid, int64_t movie_index) {
 }
 
 int pre_compose_reviews() {
-  const int BATCH_SIZE = 10;
+  const int BATCH_SIZE = 50;
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
   std::vector<std::thread> thds;
@@ -537,9 +542,9 @@ int ReadPage(int tid) {
   std::map<std::string, std::string> carrier;
   int64_t tid_64 = tid;
   int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
-  std::string movie_id = state.movie_ids[(*state.uniform_1_nummovies)(*state.gen) - 1];
-  int32_t start = (*state.uniform_1_10)(*state.gen) - 1;
-  int32_t end = start + (*state.uniform_1_10)(*state.gen);
+  std::string movie_id = state.movie_ids[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
+  int32_t start = (*state.uniform_1_10[tid])(*state.gen[tid]) - 1;
+  int32_t end = start + (*state.uniform_1_10[tid])(*state.gen[tid]);
   // int32_t start = 0;
   // int32_t end = 1;
   try{
@@ -621,12 +626,19 @@ public:
   std::string text;
   int32_t rating;
   ComposeRequest(int64_t tid){
-    req_id = (((u_int64_t)random_int64() << 4) | (tid));
-    user_id = ((*state.uniform_1_numusers)(*state.gen));
+    req_id = (((u_int64_t)random_int64() << 8) | (tid));
+    user_id = ((*state.uniform_1_numusers[tid])(*state.gen[tid]));
+    if(user_id <= 0 || user_id > kNumUsers) {
+      std::cout << "UserId Exceed Range!: "<<user_id<<std::endl<<std::flush;
+    }
     username = std::string("username_") + std::to_string(user_id);
-    movie = state.movie_names[(*state.uniform_1_nummovies)(*state.gen) - 1];
-    text = random_string(kTextLen, state);
-    rating = (*state.uniform_1_10)(*state.gen);
+    int32_t movie_id = (*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1;
+    if(movie_id < 0 || movie_id >= state.getNumMovies()) {
+      std::cout << "MovieId Exceed Range!: "<<movie_id<<std::endl<<std::flush;
+    }
+    movie = state.movie_names[movie_id];
+    text = random_string(kTextLen, state, tid);
+    rating = (*state.uniform_1_10[tid])(*state.gen[tid]);
   }
   
   int SendRequest() {
@@ -687,10 +699,17 @@ public:
   int32_t end;
   
   ReadRequest(int64_t tid) {
-    req_id = (((u_int64_t)random_int64() << 4) | (tid));
-    movie_id = state.movie_ids[(*state.uniform_1_nummovies)(*state.gen) - 1];
-    start = (*state.uniform_1_10)(*state.gen) - 1;
-    end = start + (*state.uniform_1_10)(*state.gen);
+    req_id = (((u_int64_t)random_int64() << 8) | (tid));
+    
+    
+    int32_t movie_index = (*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1;
+    if(movie_index < 0 || movie_index >= state.getNumMovies()) {
+      std::cout << "MovieId Exceed Range!: "<<movie_index<<std::endl<<std::flush;
+    }
+
+    movie_id = state.movie_ids[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
+    start = (*state.uniform_1_10[tid])(*state.gen[tid]) - 1;
+    end = start + (*state.uniform_1_10[tid])(*state.gen[tid]);
   }
   int SendRequest() {
     Page page;
@@ -727,8 +746,8 @@ struct TraceRecords {
 
 
 
-std::vector<PerfRequestWithTime> compose_reqs[kNumThd];
-std::vector<PerfRequestWithTime> read_reqs[kNumThd];
+std::vector<PerfRequestWithTime> compose_reqs[kEvalThd];
+std::vector<PerfRequestWithTime> read_reqs[kEvalThd];
 
 
 void reset(TraceRecords& traces) {
@@ -742,7 +761,7 @@ void gen_reqs(
     uint32_t num_threads, double target_mops, uint64_t duration_us, RType type) {
 
   std::vector<std::thread> threads;
-  for (int tid = 0; tid < kNumThd; tid++) {
+  for (int tid = 0; tid < num_threads; tid++) {
     threads.push_back(std::thread([&, &reqs = all_reqs[tid], tid = tid, type=type]() {
       std::random_device rd;
       std::mt19937 gen(rd());
@@ -824,10 +843,68 @@ std::vector<Trace> benchmark(
   return gathered_traces;
 }
 
+uint64_t get_average_lat(TraceRecords* t) {
+  if (t->trace_format_ != kSortedByDuration) {
+    std::sort(traces_.begin(), traces_.end(),
+              [](const Trace &x, const Trace &y) {
+                return x.duration_us < y.duration_us;
+              });
+    trace_format_ = kSortedByDuration;
+  }
+
+  auto sum = std::accumulate(
+      std::next(traces_.begin()), traces_.end(), 0ULL,
+      [](uint64_t sum, const Trace &t) { return sum + t.duration_us; });
+  return sum / traces_.size();
+}
+
+uint64_t Perf::get_nth_lat(double nth) {
+  if (trace_format_ != kSortedByDuration) {
+    std::sort(traces_.begin(), traces_.end(),
+              [](const Trace &x, const Trace &y) {
+                return x.duration_us < y.duration_us;
+              });
+    trace_format_ = kSortedByDuration;
+  }
+
+  size_t idx = nth / 100.0 * traces_.size();
+  return traces_[idx].duration_us;
+}
+
+std::vector<Trace> Perf::get_timeseries_nth_lats(uint64_t interval_us,
+                                                 double nth) {
+  std::vector<Trace> timeseries;
+  if (trace_format_ != kSortedByStart) {
+    std::sort(
+        traces_.begin(), traces_.end(),
+        [](const Trace &x, const Trace &y) { return x.start_us < y.start_us; });
+    trace_format_ = kSortedByStart;
+  }
+
+  auto cur_win_us = traces_.front().start_us;
+  auto absl_cur_win_us = traces_.front().absl_start_us;
+  std::vector<uint64_t> win_durations;
+  for (auto &trace : traces_) {
+    if (cur_win_us + interval_us < trace.start_us) {
+      std::sort(win_durations.begin(), win_durations.end());
+      if (win_durations.size() >= 100) {
+        size_t idx = nth / 100.0 * win_durations.size();
+        timeseries.emplace_back(absl_cur_win_us, cur_win_us,
+                                win_durations[idx]);
+      }
+      cur_win_us += interval_us;
+      absl_cur_win_us += interval_us;
+      win_durations.clear();
+    }
+    win_durations.push_back(trace.duration_us);
+  }
+
+  return timeseries;
+}
 
 
 int main(int argc, char *argv[]) {
-  // init_timer();
+  init_timer();
   reset(ComposeT);
   reset(ReadT);
   state.init();
@@ -839,36 +916,40 @@ int main(int argc, char *argv[]) {
   if (argc > 2) {
     num_pages = atoll(argv[2]);
   }
-  pre_compose_reviews();
-  read_pages(num_pages);
-  compose_reviews(num_reviews);
+  // pre_compose_reviews();
+
+
+  // read_pages(num_pages);
+  // compose_reviews(num_reviews);
 
 
 
 
-  // gen_reqs(read_reqs, kNumThd, 1000, 100000000, tRead);
-  // gen_reqs(compose_reqs, kNumThd, 1000, 100000000, tCompose);
+  gen_reqs(read_reqs, kEvalThd, 0.0008, 100000000, tRead);
+  std::cout << "Generated Read Requests"<< std::endl<<std::flush;
+  gen_reqs(compose_reqs, kEvalThd, 0.005, 100000000, tCompose);
+  std::cout << "Generated Compose Requests"<< std::endl<<std::flush;
 
-  // ReadT.traces_ = move(benchmark(compose_reqs, kNumThd, 1000000));
-  // auto real_duration_us = std::accumulate(ComposeT.traces_.begin(), ComposeT.traces_.end(), static_cast<uint64_t>(0),
-  //                           [](uint64_t ret, Trace t) {
-  //                             return std::max(ret, t.start_us + t.duration_us);
-  //                           });
-  // ReadT.real_mops_ = static_cast<double>(ReadT.traces_.size()) / real_duration_us;
-  // std::cout << "Read Duration: " << real_duration_us/1000000 << " s" << std::endl;
-  // std::cout << "Throughput: " << ComposeT.real_mops_ << " Mops"
-  //           << std::endl;
+  ReadT.traces_ = move(benchmark(read_reqs, kEvalThd, 1000000));
+  auto real_duration_us = std::accumulate(ReadT.traces_.begin(), ReadT.traces_.end(), static_cast<uint64_t>(0),
+                            [](uint64_t ret, Trace t) {
+                              return std::max(ret, t.start_us + t.duration_us);
+                            });
+  ReadT.real_mops_ = static_cast<double>(ReadT.traces_.size()) / real_duration_us;
+  std::cout << "Read Duration: " << real_duration_us/1000000 << " s" << std::endl;
+  std::cout << "Throughput: " << ReadT.real_mops_ << " Mops"
+            << std::endl <<std::flush;
 
 
-  // ComposeT.traces_ = move(benchmark(read_reqs, kNumThd, 1000000));
-  // real_duration_us = std::accumulate(ComposeT.traces_.begin(), ComposeT.traces_.end(), static_cast<uint64_t>(0),
-  //                           [](uint64_t ret, Trace t) {
-  //                             return std::max(ret, t.start_us + t.duration_us);
-  //                           });
-  // ComposeT.real_mops_ = static_cast<double>(ComposeT.traces_.size()) / real_duration_us;
-  // std::cout << "Compose Duration: " << real_duration_us/1000000 << " s" << std::endl;
-  // std::cout << "Throughput: " << ComposeT.real_mops_ << " Mops"
-  //           << std::endl;
+  ComposeT.traces_ = move(benchmark(compose_reqs, kEvalThd, 1000000));
+  real_duration_us = std::accumulate(ComposeT.traces_.begin(), ComposeT.traces_.end(), static_cast<uint64_t>(0),
+                            [](uint64_t ret, Trace t) {
+                              return std::max(ret, t.start_us + t.duration_us);
+                            });
+  ComposeT.real_mops_ = static_cast<double>(ComposeT.traces_.size()) / real_duration_us;
+  std::cout << "Compose Duration: " << real_duration_us/1000000 << " s" << std::endl;
+  std::cout << "Throughput: " << ComposeT.real_mops_ << " Mops"
+            << std::endl<<std::flush;
 
 
 
@@ -908,64 +989,6 @@ int main(int argc, char *argv[]) {
 
 
 
-// uint64_t Perf::get_average_lat() {
-//   if (trace_format_ != kSortedByDuration) {
-//     std::sort(traces_.begin(), traces_.end(),
-//               [](const Trace &x, const Trace &y) {
-//                 return x.duration_us < y.duration_us;
-//               });
-//     trace_format_ = kSortedByDuration;
-//   }
-
-//   auto sum = std::accumulate(
-//       std::next(traces_.begin()), traces_.end(), 0ULL,
-//       [](uint64_t sum, const Trace &t) { return sum + t.duration_us; });
-//   return sum / traces_.size();
-// }
-
-// uint64_t Perf::get_nth_lat(double nth) {
-//   if (trace_format_ != kSortedByDuration) {
-//     std::sort(traces_.begin(), traces_.end(),
-//               [](const Trace &x, const Trace &y) {
-//                 return x.duration_us < y.duration_us;
-//               });
-//     trace_format_ = kSortedByDuration;
-//   }
-
-//   size_t idx = nth / 100.0 * traces_.size();
-//   return traces_[idx].duration_us;
-// }
-
-// std::vector<Trace> Perf::get_timeseries_nth_lats(uint64_t interval_us,
-//                                                  double nth) {
-//   std::vector<Trace> timeseries;
-//   if (trace_format_ != kSortedByStart) {
-//     std::sort(
-//         traces_.begin(), traces_.end(),
-//         [](const Trace &x, const Trace &y) { return x.start_us < y.start_us; });
-//     trace_format_ = kSortedByStart;
-//   }
-
-//   auto cur_win_us = traces_.front().start_us;
-//   auto absl_cur_win_us = traces_.front().absl_start_us;
-//   std::vector<uint64_t> win_durations;
-//   for (auto &trace : traces_) {
-//     if (cur_win_us + interval_us < trace.start_us) {
-//       std::sort(win_durations.begin(), win_durations.end());
-//       if (win_durations.size() >= 100) {
-//         size_t idx = nth / 100.0 * win_durations.size();
-//         timeseries.emplace_back(absl_cur_win_us, cur_win_us,
-//                                 win_durations[idx]);
-//       }
-//       cur_win_us += interval_us;
-//       absl_cur_win_us += interval_us;
-//       win_durations.clear();
-//     }
-//     win_durations.push_back(trace.duration_us);
-//   }
-
-//   return timeseries;
-// }
 
 // double Perf::get_real_mops() const { return real_mops_; }
 
