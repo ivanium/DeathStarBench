@@ -48,7 +48,9 @@ ReviewStorageHandler::ReviewStorageHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(5ull * 1024 * 1024 * 1024); // ~1GB
+  // _pool->update_limit(10ull * 1024 * 1024 * 1024); // ~1GB
+  // _pool->update_limit(4319ull * 1024 * 1024); // ~1GB
+  _pool->update_limit(1217ull * 1024 * 1024); // ~1GB
   _rstorage_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _mongodb_client_pool = mongodb_pool;
 }
@@ -78,7 +80,7 @@ void ReviewStorageHandler::StoreReview(
   }
 
   auto collection = mongoc_client_get_collection(
-      mongodb_client, "review", "review");
+      mongodb_client, "review-storage", "review-storage");
   if (!collection) {
     ServiceException se;
     se.errorCode = ErrorCode::SE_MONGODB_ERROR;
@@ -186,7 +188,7 @@ void ReviewStorageHandler::ReadReviews(
       throw se;
     }
     auto collection = mongoc_client_get_collection(
-        mongodb_client, "review", "review");
+        mongodb_client, "review-storage", "review-storage");
     if (!collection) {
       ServiceException se;
       se.errorCode = ErrorCode::SE_MONGODB_ERROR;
@@ -232,6 +234,7 @@ void ReviewStorageHandler::ReadReviews(
       review_json_map.insert({new_review.review_id, std::string(review_json_char)});
       return_map.insert({new_review.review_id, new_review});
       bson_free(review_json_char);
+      // std::cout<<"A new review: "<<new_review.review_id<<std::endl<<std::flush;
     }
     find_span->Finish();
     bson_error_t error;

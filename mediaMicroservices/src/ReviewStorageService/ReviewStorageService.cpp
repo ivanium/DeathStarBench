@@ -53,6 +53,21 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
 
+  mongoc_client_t *mongodb_client = mongoc_client_pool_pop(mongodb_client_pool);
+  if (!mongodb_client) {
+    LOG(fatal) << "Failed to pop mongoc client";
+    return EXIT_FAILURE;
+  }
+  bool r = false;
+  while (!r) {
+    r = CreateIndex(mongodb_client, "review-storage", "review_id", true);
+    if (!r) {
+      LOG(error) << "Failed to create mongodb index, try again";
+      sleep(1);
+    }
+  }
+  mongoc_client_pool_push(mongodb_client_pool, mongodb_client);
+
   TThreadedServer server (
       std::make_shared<ReviewStorageServiceProcessor>(
           std::make_shared<ReviewStorageHandler>(mongodb_client_pool)),

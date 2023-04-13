@@ -48,7 +48,9 @@ PlotHandler::PlotHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(5ull * 1024 * 1024 * 1024); // ~1GB
+  // _pool->update_limit(5ull * 1024 * 1024 * 1024); // ~1GB
+  // _pool->update_limit(68ull * 1024 * 1024); // ~1GB
+  _pool->update_limit(1217ull * 1024 * 1024); // ~1GB
   _plot_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 
   _mongodb_client_pool = mongodb_client_pool;

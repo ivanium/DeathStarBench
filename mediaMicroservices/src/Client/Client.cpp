@@ -24,6 +24,7 @@
 #include "../ClientPool.h"
 #include "../ThriftClient.h"
 #include "../utils.h"
+#include "zipf.hpp"
 
 using apache::thrift::protocol::TBinaryProtocolFactory;
 using apache::thrift::server::TThreadedServer;
@@ -36,13 +37,18 @@ constexpr static char kCharSet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 constexpr static uint32_t kTextLen = 256;
 constexpr static uint32_t kNumThd = 2;
+// constexpr static uint32_t kNumUsers = 1000;
 constexpr static uint32_t kNumUsers = 100000;
+// constexpr static bool kSkewed = true;
 constexpr static bool kSkewed = false;
 constexpr static float kSkewness = 0.99;
-constexpr static float kMinReviews = 25;
+constexpr static float kMinReviews = 62;
 
 
-constexpr static uint32_t kEvalThd = 96;
+constexpr static uint32_t kEvalThd = 48;
+constexpr static uint32_t kEpoch = 35;
+
+
 
 uint64_t CPU_FREQ = 0;
 
@@ -120,6 +126,9 @@ struct SocialNetState {
   std::unique_ptr<std::uniform_int_distribution<>> uniform_1_10[kEvalThd];
   std::unique_ptr<std::uniform_int_distribution<>> uniform_1_numusers[kEvalThd];
   std::unique_ptr<std::uniform_int_distribution<>> uniform_1_nummovies[kEvalThd];
+  
+  std::unique_ptr<zipf_table_distribution<>> zipf_0_nummovies[kEvalThd];
+
   std::unique_ptr<std::uniform_int_distribution<>> uniform_0_charsetsize[kEvalThd];
   std::unique_ptr<std::uniform_int_distribution<int64_t>> uniform_0_maxint64[kEvalThd];
 
@@ -157,6 +166,8 @@ struct SocialNetState {
       this->uniform_1_numusers[i].reset(new std::uniform_int_distribution<>(1, kNumUsers));
       this->uniform_1_nummovies[i].reset(
           new std::uniform_int_distribution<>(1, getNumMovies()));
+      this->zipf_0_nummovies[i].reset(
+        new zipf_table_distribution<>(getNumMovies(), kSkewness));
       this->uniform_0_charsetsize[i].reset(
           new std::uniform_int_distribution<>(0, sizeof(kCharSet) - 2));
       this->uniform_0_maxint64[i].reset(new std::uniform_int_distribution<int64_t>(
@@ -290,7 +301,7 @@ int ComposeReview(int tid) {
   int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
   int32_t user_id = ((*state.uniform_1_numusers[tid])(*state.gen[tid]));
   std::string username = std::string("username_") + std::to_string(user_id);
-  std::string movie = state.movie_names[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
+  std::string movie = state.movie_names[kSkewed ? ((*state.zipf_0_nummovies[tid])(*state.gen[tid])): ((*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1)];
   std::string text = random_string(kTextLen, state, tid);
   int32_t rating = (*state.uniform_1_10[tid])(*state.gen[tid]);
   std::vector<std::future<int>> futures;
@@ -452,7 +463,7 @@ int PreComposeReview(int tid, int64_t movie_index) {
     }
   }
   
-  if(success_count < kMinReviews - 5) {
+  if(success_count < kMinReviews - 2) {
     std::cout << "Pre load reviews count not enough for movie: "<< movie << " and the succeeded count is " << success_count <<std::endl<<std::flush;
   }
   // else {
@@ -463,15 +474,19 @@ int PreComposeReview(int tid, int64_t movie_index) {
 }
 
 int pre_compose_reviews() {
-  const int BATCH_SIZE = 50;
+  const int BATCH_SIZE = 25;
+
+  // const int start = 0;
+  const int start = 55000;
+
   auto stt = std::chrono::high_resolution_clock::now();
   std::atomic<int64_t> numFinished { 0 };
   std::vector<std::thread> thds;
   for (int tid = 0; tid < kNumThd; tid++) {
     thds.push_back(std::thread([&numFinished, tid=tid, num_movies=state.getNumMovies()]() {
       std::vector<std::future<int>> futures;
-      int64_t chunkSize = (num_movies + kNumThd - 1) / kNumThd;
-      int64_t stt = chunkSize * tid;
+      int64_t chunkSize = (num_movies - start + kNumThd - 1) / kNumThd;
+      int64_t stt = start + chunkSize * tid;
       int64_t end = std::min(stt + chunkSize, (int64_t)num_movies);
       for (int64_t i = stt; i < end; i++) {
         futures.push_back(std::async(std::launch::async, [tid=tid, index=i]() {
@@ -525,8 +540,8 @@ int CallPageService(Page& page, int64_t req_id, std::string movie_id, int32_t st
   try {
     client->ReadPage(page, req_id, movie_id, start, end, carrier);
   } catch (...) {
-    std::cout << "Failed to read page" << movie_id << " from page-service"
-              << std::endl;
+    // std::cout << "Failed to read page" << movie_id << " from page-service"
+    //           << std::endl;
     // state.movieid_service_client.get()->Remove(clientWrapper);
     state.page_service_client.get()->Push(clientWrapper);
     throw;
@@ -542,15 +557,15 @@ int ReadPage(int tid) {
   std::map<std::string, std::string> carrier;
   int64_t tid_64 = tid;
   int64_t req_id = (((u_int64_t)random_int64() << 4) | (tid_64));
-  std::string movie_id = state.movie_ids[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
-  int32_t start = (*state.uniform_1_10[tid])(*state.gen[tid]) - 1;
-  int32_t end = start + (*state.uniform_1_10[tid])(*state.gen[tid]);
-  // int32_t start = 0;
-  // int32_t end = 1;
+  std::string movie_id = state.movie_ids[kSkewed ? ((*state.zipf_0_nummovies[tid])(*state.gen[tid])): ((*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1)];
+  // int32_t start = (*state.uniform_1_10[tid])(*state.gen[tid]) - 1;
+  // int32_t end = start + (*state.uniform_1_10[tid])(*state.gen[tid]);
+  int32_t start = 0;
+  int32_t end = kMinReviews - 2;
   try{
     CallPageService(page, req_id, movie_id, start, end);
   }catch (...) {
-    std::cout << "Read page failed"<<std::endl<<std::flush;  
+    // std::cout << "Read page failed"<<std::endl<<std::flush;  
     read_failed_count ++;
   }
   return 0;
@@ -632,7 +647,7 @@ public:
       std::cout << "UserId Exceed Range!: "<<user_id<<std::endl<<std::flush;
     }
     username = std::string("username_") + std::to_string(user_id);
-    int32_t movie_id = (*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1;
+    int32_t movie_id = kSkewed ? ((*state.zipf_0_nummovies[tid])(*state.gen[tid])): ((*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1);
     if(movie_id < 0 || movie_id >= state.getNumMovies()) {
       std::cout << "MovieId Exceed Range!: "<<movie_id<<std::endl<<std::flush;
     }
@@ -702,14 +717,14 @@ public:
     req_id = (((u_int64_t)random_int64() << 8) | (tid));
     
     
-    int32_t movie_index = (*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1;
+    int32_t movie_index = kSkewed ? ((*state.zipf_0_nummovies[tid])(*state.gen[tid])): ((*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1);
     if(movie_index < 0 || movie_index >= state.getNumMovies()) {
       std::cout << "MovieId Exceed Range!: "<<movie_index<<std::endl<<std::flush;
     }
 
-    movie_id = state.movie_ids[(*state.uniform_1_nummovies[tid])(*state.gen[tid]) - 1];
-    start = (*state.uniform_1_10[tid])(*state.gen[tid]) - 1;
-    end = start + (*state.uniform_1_10[tid])(*state.gen[tid]);
+    movie_id = state.movie_ids[movie_index];
+    start = 0;
+    end = kMinReviews - 2;
   }
   int SendRequest() {
     Page page;
@@ -717,7 +732,7 @@ public:
     try{
       CallPageService(page, req_id, movie_id, start, end);
     }catch (...) {
-      std::cout << "Read page failed for req_id: " << req_id << "for movie: " << movie_id <<std::endl<<std::flush;  
+      // std::cout << "Read page failed for req_id: " << req_id << "for movie: " << movie_id <<std::endl<<std::flush;  
       return 0;
     }
     return 1;
@@ -742,12 +757,13 @@ struct TraceRecords {
   TraceFormat trace_format_;
   double real_mops_;
   std::vector<Trace> traces_;
-} ComposeT, ReadT;
+} ComposeT[kEpoch], ReadT[kEpoch];
 
 
 
-std::vector<PerfRequestWithTime> compose_reqs[kEvalThd];
-std::vector<PerfRequestWithTime> read_reqs[kEvalThd];
+std::vector<PerfRequestWithTime> compose_reqs[kEpoch][kEvalThd];
+std::vector<PerfRequestWithTime> read_reqs[kEpoch][kEvalThd];
+
 
 
 void reset(TraceRecords& traces) {
@@ -797,7 +813,7 @@ std::vector<Trace> benchmark(
     uint32_t num_threads, uint64_t miss_ddl_thresh_us) {
   std::vector<std::thread> threads;
   std::vector<Trace> all_traces[num_threads];
-  int64_t failed_count = 0;
+  // int64_t failed_count = 0;
 
   for (uint32_t i = 0; i < num_threads; i++) {
     all_traces[i].reserve(all_reqs[i].size());
@@ -839,58 +855,59 @@ std::vector<Trace> benchmark(
   }
 
   std::cout << "Failed count: " << failed_count << std::endl << std::flush;
+  std::cout << "Read Failed Portion: " << failed_count*1.0/gathered_traces.size() << std::endl <<std::flush;
 
   return gathered_traces;
 }
 
 uint64_t get_average_lat(TraceRecords* t) {
   if (t->trace_format_ != kSortedByDuration) {
-    std::sort(traces_.begin(), traces_.end(),
+    std::sort(t->traces_.begin(), t->traces_.end(),
               [](const Trace &x, const Trace &y) {
                 return x.duration_us < y.duration_us;
               });
-    trace_format_ = kSortedByDuration;
+    t->trace_format_ = kSortedByDuration;
   }
 
   auto sum = std::accumulate(
-      std::next(traces_.begin()), traces_.end(), 0ULL,
+      std::next(t->traces_.begin()), t->traces_.end(), 0ULL,
       [](uint64_t sum, const Trace &t) { return sum + t.duration_us; });
-  return sum / traces_.size();
+  return sum / t->traces_.size();
 }
 
-uint64_t Perf::get_nth_lat(double nth) {
-  if (trace_format_ != kSortedByDuration) {
-    std::sort(traces_.begin(), traces_.end(),
+uint64_t get_nth_lat(TraceRecords* t, double nth) {
+  if (t->trace_format_ != kSortedByDuration) {
+    std::sort(t->traces_.begin(), t->traces_.end(),
               [](const Trace &x, const Trace &y) {
                 return x.duration_us < y.duration_us;
               });
-    trace_format_ = kSortedByDuration;
+    t->trace_format_ = kSortedByDuration;
   }
 
-  size_t idx = nth / 100.0 * traces_.size();
-  return traces_[idx].duration_us;
+  size_t idx = nth / 100.0 * t->traces_.size();
+  return t->traces_[idx].duration_us;
 }
 
-std::vector<Trace> Perf::get_timeseries_nth_lats(uint64_t interval_us,
+std::vector<Trace> get_timeseries_nth_lats(TraceRecords* t, uint64_t interval_us,
                                                  double nth) {
   std::vector<Trace> timeseries;
-  if (trace_format_ != kSortedByStart) {
+  if (t->trace_format_ != kSortedByStart) {
     std::sort(
-        traces_.begin(), traces_.end(),
+        t->traces_.begin(), t->traces_.end(),
         [](const Trace &x, const Trace &y) { return x.start_us < y.start_us; });
-    trace_format_ = kSortedByStart;
+    t->trace_format_ = kSortedByStart;
   }
 
-  auto cur_win_us = traces_.front().start_us;
-  auto absl_cur_win_us = traces_.front().absl_start_us;
+  auto cur_win_us = t->traces_.front().start_us;
+  auto absl_cur_win_us = t->traces_.front().absl_start_us;
   std::vector<uint64_t> win_durations;
-  for (auto &trace : traces_) {
+  for (auto &trace : t->traces_) {
     if (cur_win_us + interval_us < trace.start_us) {
       std::sort(win_durations.begin(), win_durations.end());
       if (win_durations.size() >= 100) {
         size_t idx = nth / 100.0 * win_durations.size();
-        timeseries.emplace_back(absl_cur_win_us, cur_win_us,
-                                win_durations[idx]);
+        Trace t = {absl_cur_win_us, cur_win_us, win_durations[idx]};
+        timeseries.emplace_back(t);
       }
       cur_win_us += interval_us;
       absl_cur_win_us += interval_us;
@@ -904,52 +921,70 @@ std::vector<Trace> Perf::get_timeseries_nth_lats(uint64_t interval_us,
 
 
 int main(int argc, char *argv[]) {
-  init_timer();
-  reset(ComposeT);
-  reset(ReadT);
-  state.init();
   int64_t num_reviews = 1000;
   int64_t num_pages = 10;
+  int64_t mode = 0;
   if (argc > 1) {
-    num_reviews = atoll(argv[1]);
+    mode = atoll(argv[1]);
   }
-  if (argc > 2) {
-    num_pages = atoll(argv[2]);
-  }
-  // pre_compose_reviews();
-
+  // if (argc > 2) {
+  //   num_pages = atoll(argv[2]);
+  // }
+  
 
   // read_pages(num_pages);
   // compose_reviews(num_reviews);
 
+  if (mode == 1) {
+    
+    std::cout << "Mode 1 Testing!"<< std::endl;
+    init_timer();
+    for(int i = 0; i < (int)kEpoch; i ++) {
+      reset(ComposeT[i]);
+      reset(ReadT[i]);
+    }
+  }
+  state.init();
+  if (mode == 0) {
+    std::cout << "Mode 0 Populating!"<< std::endl;
+    pre_compose_reviews();
+  }
+  else if (mode == 1) {
+    double max_read_ops = 0.0035;
+    double ops_per_epoch = max_read_ops / kEpoch;
+    for(int i = 0; i < (int)kEpoch; i ++) {
+      gen_reqs(read_reqs[i], kEvalThd, ops_per_epoch * (i + 1), 60000000, tRead);
+      std::cout << "Generated Read Requests"<< std::endl<<std::flush;
+      // gen_reqs(compose_reqs[i], kEvalThd, 0.005, 200000000, tCompose);
+      // std::cout << "Generated Compose Requests"<< std::endl<<std::flush;
+    }
+    for(int i = 0; i < (int)kEpoch; i ++) {
+      ReadT[i].traces_ = move(benchmark(read_reqs[i], kEvalThd, 1000000));
+      auto real_duration_us = std::accumulate(ReadT[i].traces_.begin(), ReadT[i].traces_.end(), static_cast<uint64_t>(0),
+                                [](uint64_t ret, Trace t) {
+                                  return std::max(ret, t.start_us + t.duration_us);
+                                });
+      ReadT[i].real_mops_ = static_cast<double>(ReadT[i].traces_.size()) / real_duration_us;
+      std::cout << "Read Duration: " << real_duration_us/1000000 << " s" << std::endl;
+      std::cout << "Throughput: " << ReadT[i].real_mops_ << " Mops"
+                << std::endl <<std::flush;
+      std::cout << "99\% Latency: " << get_nth_lat(&(ReadT[i]), 99) << " us"
+          << std::endl <<std::flush;
+    }
+  }
 
 
 
-  gen_reqs(read_reqs, kEvalThd, 0.0008, 100000000, tRead);
-  std::cout << "Generated Read Requests"<< std::endl<<std::flush;
-  gen_reqs(compose_reqs, kEvalThd, 0.005, 100000000, tCompose);
-  std::cout << "Generated Compose Requests"<< std::endl<<std::flush;
 
-  ReadT.traces_ = move(benchmark(read_reqs, kEvalThd, 1000000));
-  auto real_duration_us = std::accumulate(ReadT.traces_.begin(), ReadT.traces_.end(), static_cast<uint64_t>(0),
-                            [](uint64_t ret, Trace t) {
-                              return std::max(ret, t.start_us + t.duration_us);
-                            });
-  ReadT.real_mops_ = static_cast<double>(ReadT.traces_.size()) / real_duration_us;
-  std::cout << "Read Duration: " << real_duration_us/1000000 << " s" << std::endl;
-  std::cout << "Throughput: " << ReadT.real_mops_ << " Mops"
-            << std::endl <<std::flush;
-
-
-  ComposeT.traces_ = move(benchmark(compose_reqs, kEvalThd, 1000000));
-  real_duration_us = std::accumulate(ComposeT.traces_.begin(), ComposeT.traces_.end(), static_cast<uint64_t>(0),
-                            [](uint64_t ret, Trace t) {
-                              return std::max(ret, t.start_us + t.duration_us);
-                            });
-  ComposeT.real_mops_ = static_cast<double>(ComposeT.traces_.size()) / real_duration_us;
-  std::cout << "Compose Duration: " << real_duration_us/1000000 << " s" << std::endl;
-  std::cout << "Throughput: " << ComposeT.real_mops_ << " Mops"
-            << std::endl<<std::flush;
+  // ComposeT.traces_ = move(benchmark(compose_reqs, kEvalThd, 1000000));
+  // real_duration_us = std::accumulate(ComposeT.traces_.begin(), ComposeT.traces_.end(), static_cast<uint64_t>(0),
+  //                           [](uint64_t ret, Trace t) {
+  //                             return std::max(ret, t.start_us + t.duration_us);
+  //                           });
+  // ComposeT.real_mops_ = static_cast<double>(ComposeT.traces_.size()) / real_duration_us;
+  // std::cout << "Compose Duration: " << real_duration_us/1000000 << " s" << std::endl;
+  // std::cout << "Throughput: " << ComposeT.real_mops_ << " Mops"
+  //           << std::endl<<std::flush;
 
 
 
