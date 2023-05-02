@@ -54,7 +54,10 @@
   },
   "review-storage-mongodb": {
     "addr": "review-storage-mongodb",
-    "port": 27017
+    "port": 27017,
+    "keepalive_ms": 10000,
+    "timeout_ms": 10000,
+    "connections": 512
   },
   "review-storage-memcached": {
     "addr": "review-storage-memcached",

@@ -46,7 +46,7 @@ constexpr static float kMinReviews = 62;
 
 
 constexpr static uint32_t kEvalThd = 48;
-constexpr static uint32_t kEpoch = 35;
+constexpr static uint32_t kEpoch = 60;
 
 
 
@@ -950,10 +950,11 @@ int main(int argc, char *argv[]) {
     pre_compose_reviews();
   }
   else if (mode == 1) {
-    double max_read_ops = 0.0035;
+    double max_read_ops = 0.0060;
     double ops_per_epoch = max_read_ops / kEpoch;
     for(int i = 0; i < (int)kEpoch; i ++) {
       gen_reqs(read_reqs[i], kEvalThd, ops_per_epoch * (i + 1), 60000000, tRead);
+      // gen_reqs(read_reqs[i], kEvalThd, max_read_ops, 60000000, tRead);
       std::cout << "Generated Read Requests"<< std::endl<<std::flush;
       // gen_reqs(compose_reqs[i], kEvalThd, 0.005, 200000000, tCompose);
       // std::cout << "Generated Compose Requests"<< std::endl<<std::flush;

@@ -24,6 +24,7 @@ target_link_libraries(
     jaegertracing
     /usr/local/lib/libcpp_redis.a
     /usr/local/lib/libtacopie.a
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS MovieReviewService DESTINATION ./)

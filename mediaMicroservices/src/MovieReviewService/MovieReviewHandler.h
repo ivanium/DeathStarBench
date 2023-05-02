@@ -7,6 +7,8 @@
 #include <mongoc.h>
 #include <bson/bson.h>
 
+#include <nlohmann/json.hpp>
+
 #include "../../gen-cpp/MovieReviewService.h"
 #include "../../gen-cpp/ReviewStorageService.h"
 #include "../logger.h"
@@ -15,7 +17,16 @@
 #include "../RedisClient.h"
 #include "../ThriftClient.h"
 
+// [Midas]
+#include "cache_manager.hpp"
+#include "sync_kv.hpp"
+#include "time.hpp"
+constexpr static uint64_t kNumBuckets = 1 << 20;
+
 namespace media_service {
+  
+using json = nlohmann::json;
+
 class MovieReviewHandler : public MovieReviewServiceIf {
  public:
   MovieReviewHandler(
@@ -30,6 +41,8 @@ class MovieReviewHandler : public MovieReviewServiceIf {
       const std::map<std::string, std::string> & carrier) override;
   
  private:
+  midas::CachePool *_pool;
+  std::shared_ptr<midas::SyncKV<kNumBuckets>> _mreview_cache;
   ClientPool<RedisClient> *_redis_client_pool;
   mongoc_client_pool_t *_mongodb_client_pool;
   ClientPool<ThriftClient<ReviewStorageServiceClient>> *_review_client_pool;
@@ -39,6 +52,20 @@ MovieReviewHandler::MovieReviewHandler(
     ClientPool<RedisClient> *redis_client_pool,
     mongoc_client_pool_t *mongodb_pool,
     ClientPool<ThriftClient<ReviewStorageServiceClient>> *review_storage_client_pool) {
+  
+  auto cmanager = midas::CacheManager::global_cache_manager();
+  if (!cmanager->create_pool("mreviews") ||
+      (_pool = cmanager->get_pool("mreviews")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool";
+    throw se;
+  }
+  // _pool->update_limit(10ull * 1024 * 1024 * 1024); // ~1GB
+  // _pool->update_limit(4319ull * 1024 * 1024); // ~1GB
+  _pool->update_limit(1600ull * 1024 * 1024); // ~1GB
+  _mreview_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
+
   _redis_client_pool = redis_client_pool;
   _mongodb_client_pool = mongodb_pool;
   _review_client_pool = review_storage_client_pool;
@@ -201,6 +228,47 @@ void MovieReviewHandler::ReadMovieReviews(
     return;
   }
 
+  // std::string key_movie = movie_id + "_distinct_movie_review_";
+
+  // std::vector<int64_t> review_ids;
+  // size_t value_size;
+  // bool* v = new bool[stop + 2];
+  // for(int i = start; i < stop; i ++) {
+  //   std::string review_key =  key_movie + std::to_string(i);
+  //   unsigned long* id_ptr = reinterpret_cast<unsigned long *>(_mreview_cache->get(review_key.c_str(), review_key.size(), &value_size));
+  //   if (id_ptr) {
+  //     // std::cout<<"ID: "<<*id_ptr<<std::endl;
+  //     review_ids.emplace_back(*id_ptr);
+  //     free(id_ptr);
+  //   }
+  //   else {
+  //     v[i] = true;
+  //   }
+  // }
+  std::string key_movie = movie_id + "_distinct_movie_review_" + std::to_string(start) + "_" + std::to_string(stop);
+  size_t value_size;
+  char* json_ptr = reinterpret_cast<char *>(_mreview_cache->get(key_movie.c_str(), key_movie.size(), &value_size));
+  if (json_ptr) {
+    // std::cout<<"ID: "<<*id_ptr<<std::endl;
+    json review_jsons = json::parse(std::string(json_ptr, json_ptr + value_size));
+    for (auto &review_json : review_jsons) {
+      Review new_review;
+      new_review.req_id = review_json["req_id"];
+      new_review.user_id = review_json["user_id"];
+      new_review.movie_id = review_json["movie_id"];
+      new_review.text = review_json["text"];
+      new_review.rating = review_json["rating"];
+      new_review.timestamp = review_json["timestamp"];
+      new_review.review_id = review_json["review_id"];
+      _return.emplace_back(new_review);
+    }
+    free(json_ptr);
+  }
+  else{
+  
+  
+  auto missed_cycles_stt = midas::Time::get_cycles_stt();
+
   auto redis_client_wrapper = _redis_client_pool->Pop();
   if (!redis_client_wrapper) {
     ServiceException se;
@@ -286,8 +354,17 @@ void MovieReviewHandler::ReadMovieReviews(
         auto curr_review_id = bson_iter_int64(&review_id_child);
         auto curr_timestamp = bson_iter_int64(&timestamp_child);
         if (idx >= mongo_start) {
+        // if (v[idx]) {
           review_ids.emplace_back(curr_review_id);
+          
+          // std::cout<<"ID in mongo: "<<curr_review_id<<std::endl;
+          
         }
+        
+        // missed_bytes += sizeof(curr_review_id);
+        // std::string review_key =  key_movie + std::to_string(idx);
+        // if (!_mreview_cache->set(review_key.c_str(), review_key.size(), &curr_review_id, sizeof(unsigned long)))
+        //     LOG(debug) << "Failed to set review id with key " << review_key.c_str() << " to midas";
         redis_update_map.insert(
             {std::to_string(curr_timestamp), std::to_string(curr_review_id)});
         bson_iter_init(&iter_0, doc);
@@ -362,6 +439,28 @@ void MovieReviewHandler::ReadMovieReviews(
     throw;
   }
 
+  json review_vecs;
+  for (auto &review : _return) {
+    json review_json;
+    review_json["req_id"] = review.req_id;
+    review_json["user_id"] = review.user_id;
+    review_json["movie_id"] = review.movie_id;
+    review_json["text"] = review.text;
+    review_json["rating"] = review.rating;
+    review_json["timestamp"] = review.timestamp;
+    review_json["review_id"] = review.review_id;
+    review_vecs.emplace_back(review_json);
+  }
+  std::string s = review_vecs.dump();
+  
+  if (!_mreview_cache->set(key_movie.c_str(), key_movie.size(), s.c_str(), s.size()))
+    LOG(debug) << "Failed to set reviews of movie " << movie_id << " to midas";
+
+  auto missed_cycles_end = midas::Time::get_cycles_end();
+  _pool->record_miss_penalty(missed_cycles_end - missed_cycles_stt,
+                              s.size());
+
+
   if (!redis_update_map.empty()) {
     try {
       zadd_reply_future.get();
@@ -372,7 +471,7 @@ void MovieReviewHandler::ReadMovieReviews(
     }
     _redis_client_pool->Push(redis_client_wrapper);
   }
-
+  }
   span->Finish();
   
 }

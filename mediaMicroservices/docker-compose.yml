@@ -197,6 +197,7 @@ services:
 #      - 10009:9090
     restart: always
     entrypoint: /services/MovieReviewService
+    command: "redis-server /config/redis.conf"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services

@@ -50,7 +50,7 @@ ReviewStorageHandler::ReviewStorageHandler(
   }
   // _pool->update_limit(10ull * 1024 * 1024 * 1024); // ~1GB
   // _pool->update_limit(4319ull * 1024 * 1024); // ~1GB
-  _pool->update_limit(1217ull * 1024 * 1024); // ~1GB
+  _pool->update_limit(1600ull * 1024 * 1024); // ~1GB
   _rstorage_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
   _mongodb_client_pool = mongodb_pool;
 }
@@ -151,8 +151,12 @@ void ReviewStorageHandler::ReadReviews(
     throw se;
   }
   std::map<int64_t, Review> return_map;
+  // midas::kv_types::BatchPlug plug;
+  // _rstorage_cache->batch_stt(plug);
   for (auto &review_id : review_ids) {
     size_t return_value_length = 0;
+    // char *return_value = reinterpret_cast<char *>(
+    //     _rstorage_cache->bget_single(&review_id, sizeof(review_id), &return_value_length, plug));
     char *return_value = reinterpret_cast<char *>(
         _rstorage_cache->get(&review_id, sizeof(review_id), &return_value_length));
     if (return_value) {
@@ -166,12 +170,14 @@ void ReviewStorageHandler::ReadReviews(
       new_review.rating = review_json["rating"];
       new_review.timestamp = review_json["timestamp"];
       new_review.review_id = review_json["review_id"];
+      // _return_json->emplace_back(review_json.dump());
       return_map.insert(std::make_pair(new_review.review_id, new_review));
       review_ids_not_cached.erase(new_review.review_id);
       free(return_value);
       LOG(debug) << "Review: " << new_review.review_id << " found in memcached";
     }
   }
+  // _rstorage_cache->batch_end(plug);
 
   std::map<int64_t, std::string> review_json_map;
   
@@ -231,6 +237,7 @@ void ReviewStorageHandler::ReadReviews(
       new_review.rating = review_json["rating"];
       new_review.timestamp = review_json["timestamp"];
       new_review.review_id = review_json["review_id"];
+      // _return_json->emplace_back(std::string(review_json_char));
       review_json_map.insert({new_review.review_id, std::string(review_json_char)});
       return_map.insert({new_review.review_id, new_review});
       bson_free(review_json_char);
