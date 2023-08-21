@@ -23,6 +23,7 @@ target_link_libraries(
     ${Boost_LIBRARIES}
     Boost::log
     Boost::log_setup
+    midas++ rt pthread # [Midas] lib and dependent libs
 )
 
 install(TARGETS Client DESTINATION ./)
