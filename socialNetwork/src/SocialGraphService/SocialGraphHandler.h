@@ -35,9 +35,9 @@ using std::chrono::system_clock;
 class SocialGraphHandler : public SocialGraphServiceIf {
  public:
   SocialGraphHandler(mongoc_client_pool_t *, Redis *,
-                     ClientPool<ThriftClient<UserServiceClient>> *);
+                     ClientPool<ThriftClient<UserServiceClient>> *, uint64_t);
   SocialGraphHandler(mongoc_client_pool_t *, RedisCluster *,
-                     ClientPool<ThriftClient<UserServiceClient>> *);
+                     ClientPool<ThriftClient<UserServiceClient>> *, uint64_t);
   ~SocialGraphHandler() override = default;
   void GetFollowers(std::vector<int64_t> &, int64_t, int64_t,
                     const std::map<std::string, std::string> &) override;
@@ -67,11 +67,13 @@ class SocialGraphHandler : public SocialGraphServiceIf {
 
 SocialGraphHandler::SocialGraphHandler(
     mongoc_client_pool_t *mongodb_client_pool, Redis *redis_client_pool,
-    ClientPool<ThriftClient<UserServiceClient>> *user_service_client_pool) {
+    ClientPool<ThriftClient<UserServiceClient>> *user_service_client_pool,
+    uint64_t pool_size) {
   _mongodb_client_pool = mongodb_client_pool;
   _redis_client_pool = redis_client_pool;
   _redis_cluster_client_pool = nullptr;
   _user_service_client_pool = user_service_client_pool;
+
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
   if (!cmanager->create_pool("posts") ||
@@ -81,18 +83,20 @@ SocialGraphHandler::SocialGraphHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _pool->update_limit(pool_size);
   _graph_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
 SocialGraphHandler::SocialGraphHandler(
     mongoc_client_pool_t *mongodb_client_pool,
     RedisCluster *redis_cluster_client_pool,
-    ClientPool<ThriftClient<UserServiceClient>> *user_service_client_pool) {
+    ClientPool<ThriftClient<UserServiceClient>> *user_service_client_pool,
+    uint64_t pool_size) {
   _mongodb_client_pool = mongodb_client_pool;
   _redis_client_pool = nullptr;
   _redis_cluster_client_pool = redis_cluster_client_pool;
   _user_service_client_pool = user_service_client_pool;
+
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
   if (!cmanager->create_pool("posts") ||
@@ -102,7 +106,7 @@ SocialGraphHandler::SocialGraphHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _pool->update_limit(pool_size);
   _graph_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 

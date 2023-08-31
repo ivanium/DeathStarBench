@@ -52,9 +52,15 @@ int main(int argc, char *argv[]) {
   SetUpTracer("config/jaeger-config.yml", "social-graph-service");
 
   json config_json;
-  if (load_config_file("config/service-config.json", &config_json) != 0) {
+  json midas_json;
+  if (load_config_file("config/service-config.json", &config_json) != 0 ||
+      load_config_file("config/midas-config.json", &midas_json) != 0) {
     exit(EXIT_FAILURE);
   }
+
+  uint64_t sg_pool_size =
+      midas_json["social-graph-service"]["size_mb"];
+  sg_pool_size *= 1024 * 1024; // to MB
 
   int port = config_json["social-graph-service"]["port"];
 
@@ -101,9 +107,9 @@ int main(int argc, char *argv[]) {
         init_redis_cluster_client_pool(config_json, "social-graph");
     TThreadedServer server(
         std::make_shared<SocialGraphServiceProcessor>(
-            std::make_shared<SocialGraphHandler>(mongodb_client_pool,
-                                                 &redis_cluster_client_pool,
-                                                 &user_client_pool)),
+            std::make_shared<SocialGraphHandler>(
+                mongodb_client_pool, &redis_cluster_client_pool,
+                &user_client_pool, sg_pool_size)),
         server_socket, std::make_shared<TFramedTransportFactory>(),
         std::make_shared<TBinaryProtocolFactory>());
     LOG(info) << "Starting the social-graph-service server with Resis cluster...";
@@ -111,12 +117,13 @@ int main(int argc, char *argv[]) {
   } else {
     Redis redis_client_pool =
         init_redis_client_pool(config_json, "social-graph");
-    TThreadedServer server(
-        std::make_shared<SocialGraphServiceProcessor>(
-            std::make_shared<SocialGraphHandler>(
-                mongodb_client_pool, &redis_client_pool, &user_client_pool)),
-        server_socket, std::make_shared<TFramedTransportFactory>(),
-        std::make_shared<TBinaryProtocolFactory>());
+    TThreadedServer server(std::make_shared<SocialGraphServiceProcessor>(
+                               std::make_shared<SocialGraphHandler>(
+                                   mongodb_client_pool, &redis_client_pool,
+                                   &user_client_pool, sg_pool_size)),
+                           server_socket,
+                           std::make_shared<TFramedTransportFactory>(),
+                           std::make_shared<TBinaryProtocolFactory>());
     LOG(info) << "Starting the social-graph-service server ...";
     server.serve();
   }

@@ -53,9 +53,14 @@ int main(int argc, char *argv[]) {
   SetUpTracer("config/jaeger-config.yml", "home-timeline-service");
 
   json config_json;
-  if (load_config_file("config/service-config.json", &config_json) != 0) {
+  json midas_json;
+  if (load_config_file("config/service-config.json", &config_json) != 0 ||
+      load_config_file("config/midas-config.json", &midas_json) != 0) {
     exit(EXIT_FAILURE);
   }
+
+  uint64_t ht_pool_size = midas_json["home-timeline-service"]["size_mb"];
+  ht_pool_size *= 1024 * 1024; // to MB
 
   int port = config_json["home-timeline-service"]["port"];
 
@@ -91,9 +96,9 @@ int main(int argc, char *argv[]) {
         init_redis_cluster_client_pool(config_json, "home-timeline");
     TThreadedServer server(
         std::make_shared<HomeTimelineServiceProcessor>(
-            std::make_shared<HomeTimelineHandler>(&redis_cluster_client_pool,
-                                                  &post_storage_client_pool,
-                                                  &social_graph_client_pool)),
+            std::make_shared<HomeTimelineHandler>(
+                &redis_cluster_client_pool, &post_storage_client_pool,
+                &social_graph_client_pool, ht_pool_size)),
         server_socket, std::make_shared<TFramedTransportFactory>(),
         std::make_shared<TBinaryProtocolFactory>());
 
@@ -104,9 +109,9 @@ int main(int argc, char *argv[]) {
         init_redis_client_pool(config_json, "home-timeline");
     TThreadedServer server(
         std::make_shared<HomeTimelineServiceProcessor>(
-            std::make_shared<HomeTimelineHandler>(&redis_client_pool,
-                                                  &post_storage_client_pool,
-                                                  &social_graph_client_pool)),
+            std::make_shared<HomeTimelineHandler>(
+                &redis_client_pool, &post_storage_client_pool,
+                &social_graph_client_pool, ht_pool_size)),
         server_socket, std::make_shared<TFramedTransportFactory>(),
         std::make_shared<TBinaryProtocolFactory>());
 

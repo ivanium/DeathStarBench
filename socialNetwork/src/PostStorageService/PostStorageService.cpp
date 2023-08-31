@@ -30,9 +30,14 @@ int main(int argc, char* argv[]) {
   SetUpTracer("config/jaeger-config.yml", "post-storage-service");
 
   json config_json;
-  if (load_config_file("config/service-config.json", &config_json) != 0) {
+  json midas_json;
+  if (load_config_file("config/service-config.json", &config_json) != 0 ||
+      load_config_file("config/midas-config.json", &midas_json) != 0) {
     exit(EXIT_FAILURE);
   }
+
+  uint64_t ps_pool_size = midas_json["post-storage-service"]["size_mb"];
+  ps_pool_size *= 1024 * 1024; // to MB
 
   int port = config_json["post-storage-service"]["port"];
 
@@ -61,11 +66,12 @@ int main(int argc, char* argv[]) {
   mongoc_client_pool_push(mongodb_client_pool, mongodb_client);
   std::shared_ptr<TServerSocket> server_socket = get_server_socket(config_json, "0.0.0.0", port);
 
-  TThreadedServer server(
-      std::make_shared<PostStorageServiceProcessor>(
-          std::make_shared<PostStorageHandler>(mongodb_client_pool)),
-      server_socket, std::make_shared<TFramedTransportFactory>(),
-      std::make_shared<TBinaryProtocolFactory>());
+  TThreadedServer server(std::make_shared<PostStorageServiceProcessor>(
+                             std::make_shared<PostStorageHandler>(
+                                 mongodb_client_pool, ps_pool_size)),
+                         server_socket,
+                         std::make_shared<TFramedTransportFactory>(),
+                         std::make_shared<TBinaryProtocolFactory>());
 
   LOG(info) << "Starting the post-storage-service server...";
   server.serve();

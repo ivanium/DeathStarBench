@@ -55,9 +55,15 @@ int main(int argc, char *argv[]) {
   SetUpTracer("config/jaeger-config.yml", "user-timeline-service");
 
   json config_json;
-  if (load_config_file("config/service-config.json", &config_json) != 0) {
+  json midas_json;
+  if (load_config_file("config/service-config.json", &config_json) != 0 ||
+      load_config_file("config/midas-config.json", &midas_json) != 0) {
     exit(EXIT_FAILURE);
   }
+
+  uint64_t ut_pool_size =
+      midas_json["user-timeline-service"]["size_mb"];
+  ut_pool_size *= 1024 * 1024;
 
   int port = config_json["user-timeline-service"]["port"];
 
@@ -106,7 +112,7 @@ int main(int argc, char *argv[]) {
     TThreadedServer server(std::make_shared<UserTimelineServiceProcessor>(
                                std::make_shared<UserTimelineHandler>(
                                    &redis_client_pool, mongodb_client_pool,
-                                   &post_storage_client_pool)),
+                                   &post_storage_client_pool, ut_pool_size)),
                            server_socket,
                            std::make_shared<TFramedTransportFactory>(),
                            std::make_shared<TBinaryProtocolFactory>());
@@ -118,7 +124,7 @@ int main(int argc, char *argv[]) {
     TThreadedServer server(std::make_shared<UserTimelineServiceProcessor>(
                                std::make_shared<UserTimelineHandler>(
                                    &redis_client_pool, mongodb_client_pool,
-                                   &post_storage_client_pool)),
+                                   &post_storage_client_pool, ut_pool_size)),
                            server_socket,
                            std::make_shared<TFramedTransportFactory>(),
                            std::make_shared<TBinaryProtocolFactory>());

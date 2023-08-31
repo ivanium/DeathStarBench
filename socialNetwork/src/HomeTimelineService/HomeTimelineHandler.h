@@ -28,10 +28,11 @@ class HomeTimelineHandler : public HomeTimelineServiceIf {
  public:
   HomeTimelineHandler(Redis *,
                       ClientPool<ThriftClient<PostStorageServiceClient>> *,
-                      ClientPool<ThriftClient<SocialGraphServiceClient>> *);
+                      ClientPool<ThriftClient<SocialGraphServiceClient>> *, uint64_t pool_size);
   HomeTimelineHandler(RedisCluster *,
                       ClientPool<ThriftClient<PostStorageServiceClient>> *,
-                      ClientPool<ThriftClient<SocialGraphServiceClient>> *);
+                      ClientPool<ThriftClient<SocialGraphServiceClient>> *,
+                      uint64_t pool_size);
   ~HomeTimelineHandler() override = default;
 
   void ReadHomeTimeline(std::vector<Post> &, int64_t, int64_t, int, int,
@@ -55,12 +56,13 @@ HomeTimelineHandler::HomeTimelineHandler(
     Redis *redis_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool,
     ClientPool<ThriftClient<SocialGraphServiceClient>>
-        *social_graph_client_pool) {
+        *social_graph_client_pool, uint64_t pool_size) {
   _redis_client_pool = redis_pool;
   _redis_cluster_client_pool = nullptr;
   _post_client_pool = post_client_pool;
   _social_graph_client_pool = social_graph_client_pool;
 
+  // [Midas]
   auto _cmanager = midas::CacheManager::global_cache_manager();
   if (!_cmanager->create_pool("posts") ||
       (_pool = _cmanager->get_pool("posts")) == nullptr) {
@@ -69,7 +71,7 @@ HomeTimelineHandler::HomeTimelineHandler(
     se.message = "Failed to create midas cache pool!";
     throw se;
   };
-  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _pool->update_limit(pool_size);
   _post_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
@@ -77,11 +79,23 @@ HomeTimelineHandler::HomeTimelineHandler(
     RedisCluster *redis_pool,
     ClientPool<ThriftClient<PostStorageServiceClient>> *post_client_pool,
     ClientPool<ThriftClient<SocialGraphServiceClient>>
-        *social_graph_client_pool) {
+        *social_graph_client_pool, uint64_t pool_size) {
   _redis_client_pool = nullptr;
   _redis_cluster_client_pool = redis_pool;
   _post_client_pool = post_client_pool;
   _social_graph_client_pool = social_graph_client_pool;
+
+  // [Midas]
+  auto _cmanager = midas::CacheManager::global_cache_manager();
+  if (!_cmanager->create_pool("posts") ||
+      (_pool = _cmanager->get_pool("posts")) == nullptr) {
+    ServiceException se;
+    se.errorCode = ErrorCode::SE_MIDAS_ERROR;
+    se.message = "Failed to create midas cache pool!";
+    throw se;
+  };
+  _pool->update_limit(pool_size);
+  _post_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
 void HomeTimelineHandler::WriteHomeTimeline(

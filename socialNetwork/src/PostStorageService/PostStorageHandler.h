@@ -25,7 +25,7 @@ using json = nlohmann::json;
 
 class PostStorageHandler : public PostStorageServiceIf {
  public:
-  PostStorageHandler(mongoc_client_pool_t *);
+  PostStorageHandler(mongoc_client_pool_t *, uint64_t);
   ~PostStorageHandler() override = default;
 
   void StorePost(int64_t req_id, const Post &post,
@@ -45,8 +45,9 @@ private:
 };
 
 PostStorageHandler::PostStorageHandler(
-    mongoc_client_pool_t *mongodb_client_pool) {
+    mongoc_client_pool_t *mongodb_client_pool, uint64_t pool_size) {
   _mongodb_client_pool = mongodb_client_pool;
+
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
   if (!cmanager->create_pool("posts") ||
@@ -56,7 +57,7 @@ PostStorageHandler::PostStorageHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(512ull * 1024 * 1024); // ~512MB
+  _pool->update_limit(pool_size);
   _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 }
 

@@ -23,7 +23,7 @@ namespace social_network {
 
 class UserMentionHandler : public UserMentionServiceIf {
  public:
-  UserMentionHandler(memcached_pool_st *, mongoc_client_pool_t *);
+  UserMentionHandler(memcached_pool_st *, mongoc_client_pool_t *, uint64_t);
   ~UserMentionHandler() override = default;
 
   void ComposeUserMentions(std::vector<UserMention> &_return, int64_t,
@@ -39,9 +39,10 @@ class UserMentionHandler : public UserMentionServiceIf {
 
 UserMentionHandler::UserMentionHandler(
     memcached_pool_st *memcached_client_pool,
-    mongoc_client_pool_t *mongodb_client_pool) {
+    mongoc_client_pool_t *mongodb_client_pool, uint64_t pool_size) {
   _memcached_client_pool = memcached_client_pool;
   _mongodb_client_pool = mongodb_client_pool;
+
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
   if (!cmanager->create_pool("username") ||
@@ -51,7 +52,7 @@ UserMentionHandler::UserMentionHandler(
     se.message = "Failed to create midas cache pool";
     throw se;
   }
-  _pool->update_limit(256ull * 1024 * 1024); // ~256MB
+  _pool->update_limit(pool_size);
   _uname_cache = std::make_unique<midas::SyncKV<kNumBuckets>>(_pool);
 }
 
