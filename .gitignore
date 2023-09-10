@@ -9,3 +9,6 @@ build
 **/.cache
 
 compile_commands.json
+
+socialNetwork/dbs*
+socialNetwork/services
