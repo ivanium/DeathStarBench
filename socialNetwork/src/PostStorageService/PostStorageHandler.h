@@ -592,7 +592,7 @@ void PostStorageHandler::ReadPosts(
       }
       // auto set_span = opentracing::Tracer::Global()->StartSpan(
       //     "mmc_set_client", {opentracing::ChildOf(&span->context())});
-      LOG(info) << "YIFAN: insert posts into memcached";
+      LOG(debug) << "YIFAN: insert posts into memcached";
       for (auto &it : post_json_map) {
         std::string id_str = std::to_string(it.first);
         _rc = memcached_set(_memcached_client, id_str.c_str(), id_str.length(),
