@@ -69,6 +69,8 @@ UserTimelineHandler::UserTimelineHandler(
     throw se;
   };
   _pool->update_limit(pool_size);
+  _pool->set_weight(2);
+  _pool->set_lat_critical(true);
   _post_cache = std::make_shared<midas::SyncKV<kNumBuckets>>(_pool);
 
   _redis_client_pool = redis_pool;
