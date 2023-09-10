@@ -6,8 +6,10 @@ build
 */wrk2/wrk
 
 socialNetwork/services
-socialNetwork/dbs
+socialNetwork/dbs*
 socialNetwork/bench
+
+mediaMicroservices/wrk2
 
 **/.clangd
 **/.cache
