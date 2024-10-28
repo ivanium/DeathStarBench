@@ -1,4 +1,4 @@
-socialnetwork-yifan-client-1
+socialnetwork-sn-client-1
 socialnetwork-jaeger-agent-1
 socialnetwork-user-service-1
 socialnetwork-media-service-1

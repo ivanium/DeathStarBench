@@ -4,6 +4,6 @@ export SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null &&
 export ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
 cp ${ROOT_DIR}/build/src/Client/Client ${ROOT_DIR}/services/Client
-echo "docker exec -it socialnetwork-yifan-client-1 /services/Client $1"
-docker exec -it socialnetwork-yifan-client-1 /services/Client $1 2>&1 | tee midas.log
-# docker exec -it socialnetwork-yifan-client-1 /bin/bash
+echo "docker exec -it socialnetwork-sn-client-1 /services/Client $1"
+docker exec -it socialnetwork-sn-client-1 /services/Client $1 2>&1 | tee midas.log
+# docker exec -it socialnetwork-sn-client-1 /bin/bash

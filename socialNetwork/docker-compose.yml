@@ -12,7 +12,6 @@ services:
         condition: service_started
     # restart: always
     entrypoint: /services/SocialGraphService
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -24,11 +23,9 @@ services:
     # ports:
     #   - 27018:27017
     restart: always
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/social-graph-mongodb-1/db:/data/db
-    # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
 
   social-graph-redis:
     image: redis
@@ -36,7 +33,6 @@ services:
     # ports:
     #   - 6380:6379
     restart: always
-    cpuset: "25,27,29,31-47"
 
   home-timeline-redis:
     image: redis
@@ -44,8 +40,6 @@ services:
     # ports:
     #   - 6381:6379
     restart: always
-    # command: "redis-server /social-network-microservices/config/yifan-redis.conf"
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       # - ./config:/social-network-microservices/config
@@ -60,7 +54,6 @@ services:
       jaeger-agent:
         condition: service_started
     entrypoint: /services/ComposePostService
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -78,7 +71,6 @@ services:
       post-storage-mongodb:
         condition: service_started
     entrypoint: /services/PostStorageService
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -95,7 +87,6 @@ services:
       - "-t 8"
       - "-I 32m"
       - "-c 4096"
-    cpuset: "25,27,29,31-47"
 
   post-storage-mongodb:
     image: mongo:4.4.6
@@ -103,8 +94,6 @@ services:
     #    ports:
     #      - 27019:27017
     restart: always
-    # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/post-storage-mongodb-1/db:/data/db
@@ -121,7 +110,6 @@ services:
       user-timeline-mongodb:
         condition: service_started
     entrypoint: /services/UserTimelineService
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -133,8 +121,7 @@ services:
     #    ports:
     #      - 6383:6379
     restart: always
-    command: "redis-server /social-network-microservices/config/yifan-redis.conf"
-    cpuset: "25,27,29,31-47"
+    command: "redis-server /social-network-microservices/config/midas-redis.conf"
     volumes:
       - /dev/shm:/dev/shm
       - ./config:/social-network-microservices/config
@@ -146,8 +133,6 @@ services:
     #    ports:
     #      - 27020:27017
     restart: always
-    # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/user-timeline-mongodb-1/db:/data/db
@@ -164,7 +149,6 @@ services:
         condition: service_started
       url-shorten-mongodb:
         condition: service_started
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./services:/services
@@ -181,7 +165,6 @@ services:
       - "-t 8"
       - "-I 32m"
       - "-c 4096"
-    cpuset: "25,27,29,31-47"
 
   url-shorten-mongodb:
     image: mongo:4.4.6
@@ -189,8 +172,6 @@ services:
     #    ports:
     #      - 27021:27017
     restart: always
-    # command: "/usr/bin/mongod --wiredTigerCacheSizeGB=0.02"
-    cpuset: "25,27,29,31-47"
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/url-shorten-mongodb-1/db:/data/db
@@ -211,7 +192,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   user-memcached:
     image: memcached
@@ -224,7 +204,6 @@ services:
       - "-t 8"
       - "-I 32m"
       - "-c 4096"
-    cpuset: "25,27,29,31-47"
 
   user-mongodb:
     image: mongo:4.4.6
@@ -235,7 +214,6 @@ services:
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/user-mongodb-1/db:/data/db
-    cpuset: "25,27,29,31-47"
 
   media-service:
     image: socialnet_buildbase:latest
@@ -253,7 +231,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   media-memcached:
     image: memcached
@@ -266,7 +243,6 @@ services:
       - "-t 8"
       - "-I 32m"
       - "-c 4096"
-    cpuset: "25,27,29,31-47"
 
   media-mongodb:
     image: mongo:4.4.6
@@ -277,7 +253,6 @@ services:
     volumes:
       - /dev/shm:/dev/shm
       - ./dbs/media-mongodb-1/db:/data/db
-    cpuset: "25,27,29,31-47"
 
   text-service:
     image: socialnet_buildbase:latest
@@ -293,7 +268,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   unique-id-service:
     image: socialnet_buildbase:latest
@@ -309,7 +283,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   user-mention-service:
     image: socialnet_buildbase:latest
@@ -325,7 +298,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   home-timeline-service:
     image: socialnet_buildbase:latest
@@ -341,7 +313,6 @@ services:
       - /dev/shm:/dev/shm
       - ./services:/services
       - ./config:/config
-    cpuset: "25,27,29,31-47"
 
   nginx-thrift:
     image: yg397/openresty-thrift:xenial
@@ -359,7 +330,6 @@ services:
       - ./nginx-web-server/jaeger-config.json:/usr/local/openresty/nginx/jaeger-config.json
       - ./gen-lua:/gen-lua
       - ./docker/openresty-thrift/lua-thrift:/usr/local/openresty/lualib/thrift
-    cpuset: "25,27,29,31-47"
 
   media-frontend:
     image: yg397/media-frontend:xenial
@@ -373,7 +343,6 @@ services:
     volumes:
       - ./media-frontend/lua-scripts:/usr/local/openresty/nginx/lua-scripts
       - ./media-frontend/conf/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
-    cpuset: "25,27,29,31-47"
 
   jaeger-agent:
     image: jaegertracing/all-in-one:latest
@@ -388,11 +357,10 @@ services:
     restart: always
     environment:
       - COLLECTOR_ZIPKIN_HTTP_PORT=9411
-    cpuset: "25,27,29,31-47"
 
-  yifan-client:
+  sn-client:
     image: socialnet_buildbase:latest
-    hostname: yifan-client
+    hostname: sn-client
     #    ports:
     #      - 10009:9090
     restart: always
@@ -402,4 +370,3 @@ services:
       - ./services:/services
       - ./datasets:/datasets
       - ./config:/config
-    cpuset: "25,27,29,31-47"
