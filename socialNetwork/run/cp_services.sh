@@ -5,6 +5,8 @@ ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
 apps=( MediaService UrlShortenService PostStorageService UserMentionService ComposePostService SocialGraphService UserService HomeTimelineService TextService UserTimelineService UniqueIdService Client )
 
+mkdir -p ${ROOT_DIR}/services
+
 for app in ${apps[@]}
 do
 #     echo $app

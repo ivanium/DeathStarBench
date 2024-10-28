@@ -3,7 +3,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$( cd -- "$SCRIPT_DIR/.." &> /dev/null && pwd )
 
-MIDAS_DIR=$HOME/code/cachebank
+MIDAS_DIR=$( cd -- "$ROOT_DIR/../../.." &> /dev/null && pwd )
 
 IMAGE_NAME=socialnet_buildbase
 CONTAINER_NAME=${IMAGE_NAME}
@@ -26,6 +26,14 @@ into_docker() {
     docker exec -it ${CONTAINER_NAME} /bin/bash
 }
 
+compile_socialnet() {
+    docker exec -it ${CONTAINER_NAME} /bin/bash -c "cd $ROOT_DIR && ./run/compile.sh"
+}
+
+launch_daemon() {
+    docker exec -it ${CONTAINER_NAME} /bin/bash -c "cd /midas && ./scripts/run_daemon.sh"
+}
+
 if [[ ! $1 ]] || [[ $1 == start ]]
 then
     start_docker
@@ -34,4 +42,12 @@ elif [[ $1 == stop ]]
 then
     docker stop ${CONTAINER_NAME}
     docker rm ${CONTAINER_NAME}
+elif [[ $1 == compile ]]
+then
+    start_docker
+    compile_socialnet
+elif [[ $1 == daemon ]]
+then
+    start_docker
+    launch_daemon
 fi
