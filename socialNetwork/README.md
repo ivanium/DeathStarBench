@@ -1,20 +1,8 @@
-# Social Network Microservices
+# SocialNet with Midas Support
 
-A social network with unidirectional follow relationships, implemented with loosely-coupled microservices, communicating with each other via Thrift RPCs.
+This is the SocialNet microservice in the [DeathStarBench](https://github.com/delimitrou/DeathStarBench) suite. We port it to use soft memory with Midas based on commit [`1c3f3b6`](https://github.com/delimitrou/DeathStarBench/commit/1c3f3b63643110e40ee6160e945aeb39fee5eb7b).
 
-## Application Structure
-
-![Social Network Architecture](figures/socialNet_arch.png)
-
-Supported actions:
-
-* Create text post (optional media: image, video, shortened URL, user tag)
-* Read post
-* Read entire user timeline
-* Receive recommendations on which users to follow
-* Search database for user or post
-* Register/Login using user credentials
-* Follow/Unfollow user
+Intersted users can find the original README [here](orig_README.md).
 
 ## Pre-requirements
 
@@ -23,117 +11,114 @@ Supported actions:
 * Python 3.5+ (with asyncio and aiohttp)
 * libssl-dev (apt-get install libssl-dev)
 * libz-dev (apt-get install libz-dev)
-* luarocks (apt-get install luarocks)
-* luasocket (luarocks install luasocket)
+* Midas (https://github.com/uclasystem/midas)
 
-## Running the social network application
+## Setup and Compile
 
-### Before you start
+We have provided a set of scripts under `run/` to faciliate the setup process.
 
-* Install Docker and Docker Compose.
-* Make sure the following ports are available: port `8080` for Nginx frontend, `8081` for media frontend and `16686` for Jaeger.
-
-### Start docker containers
-
-#### Start docker containers on single machine with `docker-compose`
-
-Start docker containers by running `docker-compose up -d`. All images will be
-pulled from Docker Hub.
-
-#### Start docker containers on a machine cluster with `docker swarm`
-
-Before starting the containers, make sure you are on the master node of the docker swarm nodes.
+1. We first need to compile the base docker image:
 
 ```bash
-docker stack deploy --compose-file=docker-compose-swarm.yml <service-name>
+# Under SocialNet root dir (this dir):
+./build.sh image  # This may take about 5 minutes to finish
 ```
 
-### Register users and construct social graphs
-
-Register users and construct social graph by running
-`python3 scripts/init_social_graph.py --graph=<socfb-Reed98, ego-twitter, or soc-twitter-follows-mun>`. It will initialize a social graph from a small social network [Reed98 Facebook Networks](http://networkrepository.com/socfb-Reed98.php), a medium social network [Ego Twitter](https://snap.stanford.edu/data/ego-Twitter.html), or a large social network [TWITTER-FOLLOWS-MUN](https://networkrepository.com/soc-twitter-follows-mun.php).
-
-### Running HTTP workload generator
-
-#### Make
+This should create a new docker image locally named `socialnet_buildbase`:
 
 ```bash
-cd wrk2
-make
+docker image ls
+## Sample outputs:
+# REPOSITORY                   TAG       IMAGE ID       CREATED         SIZE
+# socialnet_buildbase          latest    6dd159810afb   2 minutes ago   1.3GB
+# ...
 ```
 
-#### Compose posts
+2. We then can compile SocialNet. NOTE that we must have Midas compiled and installed before this step.
+
+To compile Midas:
 
 ```bash
-cd wrk2
-./wrk -D exp -t <num-threads> -c <num-conns> -d <duration> -L -s ./scripts/social-network/compose-post.lua http://localhost:8080/wrk2-api/post/compose -R <reqs-per-sec>
+./build.sh socialnet
+./run/cp_services.sh
 ```
 
-#### Read home timelines
+Now all compiled binaries are under `services/` dir.
+
+## Run
+1. First, follow the same instructions to start Midas daemon.
+
+2. Launch all SocialNet microservices:
 
 ```bash
-cd wrk2
-./wrk -D exp -t <num-threads> -c <num-conns> -d <duration> -L -s ./scripts/social-network/read-home-timeline.lua http://localhost:8080/wrk2-api/home-timeline/read -R <reqs-per-sec>
+./run/up.sh
 ```
 
-#### Read user timelines
+3. After all services are started, we can use the client to init/populate all involved databases with our datasets:
+NOTE: since databases are persistent (under `dbs/`), we only need to init them once at the first time.
 
 ```bash
-cd wrk2
-./wrk -D exp -t <num-threads> -c <num-conns> -d <duration> -L -s ./scripts/social-network/read-user-timeline.lua http://localhost:8080/wrk2-api/user-timeline/read -R <reqs-per-sec>
+./client.sh init  # This is a long process that may take ~20-30 minutes to finish.
+## Sample output looks like:
+# docker exec -it socialnetwork_sn-client_1 /services/Client init
+# user-service
+# 9090 user-service 10000 done
+# compose-post-service
+# 9090 compose-post-service 10000 done
+# home-timeline-service
+# 9090 home-timeline-service 10000 done
+# user-timeline-service
+# 9090 user-timeline-service 10000 done
+# social-graph-service
+# 9090 social-graph-service 10000 done
+# 465017 835423
+# Register 100 users...
+# Register 10100 users...
+# Register 20100 users...
 ```
 
-#### View Jaeger traces
-View Jaeger traces by accessing `http://localhost:16686`
+NOTE: only the first time needs to run this command. Databases are stored under `dbs/` after intialization. Users can delete the `dbs/` directory to reset the database state.
 
-Example of a Jaeger trace for a compose post request:
+4. We then can run real workloads with the client:
 
-![jaeger_example](figures/socialNet_jaeger.png)
+```bash
+./run/client warmup
+```
 
-#### Use Front End
+Here adding the warmup option will run an additionally phase before the real load to warm up services. It is recommended to add this option to get more stable results.
+Sample outputs may look like:
 
-After starting all containers using `docker-compose up -d`, visit `http://localhost:8080` to use the front end.
-
-First you could see the login and signup page:
-![login_page](figures/login.png)
-![signup_page](figures/signup.png)
-
-In order to load default users into database, visit `http://localhost:8080/main.html` once. Then click compose to post new contents.
-
-After composing a few posts, you could see your own posts in user timeline page. Click follow button on the right side to follow defualt users:
-![user_timeline_page](figures/user_timeline.png)
-
-To see your own posts in home timeline page, click the username and profile button:
-![home_timeline_page](figures/home_timeline.png)
-
-Posts could be mixed with text, user mention and image.
-
-Click the contact button to follow/unfollow other users; follower/followee list would be shown below in form of user-id:
-![follow_page](figures/follow.png)
-
-## Enable TLS
-
-If you are using `docker-compose`, start docker containers by running `docker-compose -f docker-compose-tls.yml up -d` to enable TLS.
-
-Since the `depends_on` option is ignored when deploying a stack in swarm mode with a version 3 Compose file, you
-must turn on TLS manually by modifing `config/mongod.conf`, `config/redis.conf`, `config/service-config.json` and
-`nginx-web-server/conf/nginx.conf` to enable TLS with `docker swarm`.
-
-## Enable Redis Sharding
-
-start docker containers by running `docker-compose -f docker-compose-sharding.yml up -d` to enable cache and DB sharding. Currently only Redis sharding is available.
-
-## Development Status
-
-This application is still actively being developed, so keep an eye on the repo to stay up-to-date with recent changes.
-
-### Planned updates
-
-* Upgraded recommender
-* Upgraded search engine
-* MongoDB and Memcached sharding
-
-## Questions and contact
-
-You are welcome to submit a pull request if you find a bug or have extended the application in an interesting way. For any questions please contact us at: <microservices-bench-L@list.cornell.edu>
-
+```txt
+docker exec -it socialnetwork_sn-client_1 /services/Client warmup
+user-service
+9090 user-service 100000 done
+compose-post-service
+9090 compose-post-service 100000 done
+home-timeline-service
+9090 home-timeline-service 100000 done
+user-timeline-service
+9090 user-timeline-service 100000 done
+social-graph-service
+9090 social-graph-service 100000 done
+41536 1362220
+Start reading posts (user timelines)...
+Finished users: 100
+Finished users: 10100
+Finished users: 20100
+Finished users: 30100
+Finished users: 40100
+Read posts (user timelines) duration: 4560ms
+[Info] Start generating requests...
+[Info] Finish generating warmup requests...
+[Info] Finish generating perf requests...
+[Info] Tput: 400.584 Kops
+Timer initialized, CPU Freq: 2095MHz
+[Info] Start generating requests...
+[Info] Finish generating warmup requests...
+[Info] Finish generating perf requests...
+[Info] Tput: 19.868 Kops
+[Info] Tput: 0.002 Kops
+Real Tput: 19.8912 Kops
+P99 Latency: 622 us
+raw: 10 622     19.891
+```
