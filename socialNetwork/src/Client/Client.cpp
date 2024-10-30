@@ -53,7 +53,7 @@ constexpr static uint32_t kEvalThd = 20;
 // constexpr static uint32_t kEpoch = 10;
 
 constexpr static char kDatasetPath[] = "/datasets/social-graph";
-constexpr static char kDatasetName[] = "soc-twitter-follows-mun";
+constexpr static char kDatasetName[] = "socfb-Penn94";
 // constexpr static char kDatasetName[] = "socfb-Reed98";
 
 uint64_t CPU_FREQ = 0;
@@ -166,7 +166,8 @@ struct SocialNetState {
     }
     int64_t src, dst;
     while (edgeFile >> src >> dst) {
-      graph.edges.push_back(std::pair<int64_t, int64_t>(src, dst));
+      // NOTE: for Socfb-Penn94, the node id starts from 1.
+      graph.edges.push_back(std::pair<int64_t, int64_t>(src - 1, dst - 1));
     }
     std::cout << graph.numUsers << " " << graph.edges.size() << std::endl;
     return 0;
