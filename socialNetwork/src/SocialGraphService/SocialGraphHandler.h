@@ -76,8 +76,8 @@ SocialGraphHandler::SocialGraphHandler(
 
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
-  if (!cmanager->create_pool("posts") ||
-      (_pool = cmanager->get_pool("posts")) == nullptr) {
+  if (!cmanager->create_pool("social-graph") ||
+      (_pool = cmanager->get_pool("social-graph")) == nullptr) {
     ServiceException se;
     se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     se.message = "Failed to create midas cache pool";
@@ -99,8 +99,8 @@ SocialGraphHandler::SocialGraphHandler(
 
   // [Midas]
   auto cmanager = midas::CacheManager::global_cache_manager();
-  if (!cmanager->create_pool("posts") ||
-      (_pool = cmanager->get_pool("posts")) == nullptr) {
+  if (!cmanager->create_pool("social-graph") ||
+      (_pool = cmanager->get_pool("social-graph")) == nullptr) {
     ServiceException se;
     se.errorCode = ErrorCode::SE_MIDAS_ERROR;
     se.message = "Failed to create midas cache pool";
